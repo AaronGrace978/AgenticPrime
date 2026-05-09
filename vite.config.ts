@@ -462,13 +462,13 @@ async function createArtifactPacket(request: ExportArtifactRequest, root: string
       name: 'action-packet.md',
       label: 'Action packet',
       purpose: 'Human-readable plan, risks, controls, and approved next steps.',
-      content: renderActionPacket(request, steps),
+      content: renderActionPacket(request, steps, manifest),
     },
     {
       name: 'submission.md',
       label: 'Hackathon submission draft',
       purpose: 'Copy-ready project name, pitch, description, and protocol notes.',
-      content: renderSubmissionDraft(request),
+      content: renderSubmissionDraft(request, manifest),
     },
     {
       name: 'tasks.json',
@@ -484,6 +484,12 @@ async function createArtifactPacket(request: ExportArtifactRequest, root: string
         null,
         2,
       )}\n`,
+    },
+    {
+      name: 'argument-transcript.md',
+      label: 'Argument transcript',
+      purpose: 'The five-agent debate that produced the approved surface, plus closing fingerprint.',
+      content: renderArgumentTranscript(request, manifest),
     },
     {
       name: 'surface.html',
@@ -509,8 +515,22 @@ async function createArtifactPacket(request: ExportArtifactRequest, root: string
   }
 }
 
-function renderActionPacket(request: ExportArtifactRequest, steps: ExportArtifactRequest['steps'] = []): string {
+function renderActionPacket(
+  request: ExportArtifactRequest,
+  steps: ExportArtifactRequest['steps'] = [],
+  manifest: Record<string, unknown> = {},
+): string {
   const title = request.useCase?.title || 'Generated Surface'
+  const closing = readClosingLines(manifest)
+  const tagline = readReceiptTagline(manifest)
+  const lines = readArgumentLines(manifest)
+  const lensCount = lines.filter((line) => line.agent === 'lens').length
+  const lastSpeaker = lines[lines.length - 1]?.agent
+
+  const closingBlock = closing.length > 0
+    ? closing.map((line) => `- **${agentDisplayName(line.agent)}:** ${line.text ?? ''}`).join('\n')
+    : '_No closing lines recorded._'
+
   return `# ${title} Action Packet
 
 ## Intent
@@ -528,32 +548,229 @@ ${steps.map((step, index) => `${index + 1}. **${step.title}** - ${step.detail}`)
 ${JSON.stringify(request.inputs ?? {}, null, 2)}
 \`\`\`
 
+## Five voices, one surface
+${closingBlock}
+
+> ${tagline || 'Five agents, one surface, no dashboard.'}
+
+**Argument fingerprint:** ${lines.length} lines exchanged · Lens objected ${lensCount} time(s) · Last word: ${agentDisplayName(lastSpeaker ?? 'wild')}.
+See \`argument-transcript.md\` for the full debate.
+
 ## What This File Is
 This is the concrete artifact AgenticPrime created after approval. It is safe to edit, submit, hand to another agent, or use as the source of truth for the next build step.
 `
 }
 
-function renderSubmissionDraft(request: ExportArtifactRequest): string {
+function renderSubmissionDraft(
+  request: ExportArtifactRequest,
+  manifest: Record<string, unknown> = {},
+): string {
   const title = request.useCase?.title || 'AgenticPrime Surface'
+  const lines = readArgumentLines(manifest)
+  const closing = readClosingLines(manifest)
+  const tagline = readReceiptTagline(manifest)
+  const lensCount = lines.filter((line) => line.agent === 'lens').length
+  const lastSpeaker = lines[lines.length - 1]?.agent
+
+  const closingBlock = closing.length > 0
+    ? closing.map((line) => `- **${agentDisplayName(line.agent)}:** ${line.text ?? ''}`).join('\n')
+    : '_No closing lines recorded._'
+
   return `# ${title}
 
 ## One-sentence pitch
-AgenticPrime turns one user intent into an interactive runtime UI with controls, reasoning, approval, and exportable artifacts.
+Five agents argue. The app appears. AgenticPrime turns one user intent into an interactive runtime UI with controls, reasoning, a visible debate, a human approval gate, and exportable artifacts.
 
 ## What we built
-An agentic interface that asks a model for a structured UI manifest, renders that manifest as an interactive surface, lets the user approve the plan, then writes a local submission packet with the manifest, action plan, tasks, and standalone surface.
+An agentic interface that asks a model for a structured UI manifest, renders that manifest as an interactive surface while five named agents debate it out loud, lets the user approve the plan, then dissolves the surface and writes a local submission packet with the manifest, action plan, tasks, debate transcript, and a standalone HTML surface.
 
 ## Why it is generative UI, not a chatbot
-The model is not answering in a chat transcript. It is producing the shape of the interface itself: cards, metrics, controls, timeline, approval gate, console, and checklist.
+The model is not answering in a chat transcript. It is producing the shape of the interface itself: cards, metrics, controls, timeline, approval gate, console, and checklist. The five-agent argument is rendered as a live, color-coded stream so the reasoning is visible, not hidden.
+
+## Why this is theater, not just a tool
+Five named agents (Sage, Forge, Lens, Echo, Wild) argue the surface into existence in real time. When the approval block enters, Lens objects on risk, Wild rebuts, and the block visibly shakes until a human gate is added. After approval, the surface dissolves on purpose — leaving a receipt that knows when to disappear.
+
+## Argument fingerprint for this run
+- Lines exchanged: ${lines.length}
+- Times Lens objected: ${lensCount}
+- Last word: ${agentDisplayName(lastSpeaker ?? 'wild')}
+
+## Closing lines (in order)
+${closingBlock}
+
+> ${tagline || 'Five agents, one surface, no dashboard.'}
 
 ## Protocols / patterns used
-- Runtime-generated UI manifest
+- Runtime-generated UI manifest with author metadata per block
+- Visible multi-agent debate with a real disagreement gate
+- Cinematic dissolve with a durable receipt
 - Local provider bridge through Vite
 - BYOK model provider selection
-- Exportable action packet for downstream agents
+- Exportable action packet (manifest, action plan, tasks, transcript, surface)
 
 ## Current intent
 ${request.intent || 'No intent provided.'}
+`
+}
+
+type ArgumentLineExport = {
+  agent?: string
+  text?: string
+  beat?: string
+  proposedAt?: number
+}
+
+type ClosingLineExport = {
+  agent?: string
+  text?: string
+}
+
+function readArgumentLines(manifest: Record<string, unknown>): ArgumentLineExport[] {
+  const value = manifest.argument
+  if (!Array.isArray(value)) return []
+  return value.filter(isRecord).map((entry) => ({
+    agent: asString(entry.agent),
+    text: asString(entry.text),
+    beat: asString(entry.beat),
+    proposedAt: typeof entry.proposedAt === 'number' ? entry.proposedAt : undefined,
+  }))
+}
+
+function readClosingLines(manifest: Record<string, unknown>): ClosingLineExport[] {
+  const value = manifest.closingLines
+  if (!Array.isArray(value)) return []
+  return value.filter(isRecord).map((entry) => ({
+    agent: asString(entry.agent),
+    text: asString(entry.text),
+  }))
+}
+
+function readReceiptTagline(manifest: Record<string, unknown>): string {
+  return asString(manifest.receiptTagline) ?? ''
+}
+
+function agentDisplayName(id: string | undefined): string {
+  switch (id) {
+    case 'sage': return 'Sage'
+    case 'forge': return 'Forge'
+    case 'lens': return 'Lens'
+    case 'echo': return 'Echo'
+    case 'wild': return 'Wild'
+    default: return id ?? 'Agent'
+  }
+}
+
+function agentRoleName(id: string | undefined): string {
+  switch (id) {
+    case 'sage': return 'Strategist'
+    case 'forge': return 'Builder'
+    case 'lens': return 'Critic'
+    case 'echo': return 'Synthesizer'
+    case 'wild': return 'Wildcard'
+    default: return ''
+  }
+}
+
+function renderDebateSection(
+  argumentLines: ArgumentLineExport[],
+  closingLines: ClosingLineExport[],
+  tagline: string,
+  lensCount: number,
+  lastSpeaker: string | undefined,
+): string {
+  if (argumentLines.length === 0 && closingLines.length === 0) {
+    return ''
+  }
+
+  const lineMarkup = argumentLines
+    .map((line) => {
+      const beat = line.beat ?? 'open'
+      const agent = line.agent ?? 'echo'
+      const name = agentDisplayName(agent)
+      const role = agentRoleName(agent)
+      const text = line.text ?? ''
+      return `<div class="debate-line agent-${escapeHtml(agent)} beat-${escapeHtml(beat)}"><div class="debate-meta"><strong>${escapeHtml(name)}</strong><span>${escapeHtml(role)}</span><span style="margin-left:auto;text-transform:uppercase;letter-spacing:0.12em;">${escapeHtml(beat)}</span></div><p class="debate-text">${escapeHtml(text)}</p></div>`
+    })
+    .join('\n            ')
+
+  const closingMarkup = closingLines
+    .map((line) => {
+      const agent = line.agent ?? 'echo'
+      const name = agentDisplayName(agent)
+      const text = line.text ?? ''
+      return `<div class="closing-line agent-${escapeHtml(agent)}"><strong>${escapeHtml(name)}:</strong> <span>${escapeHtml(text)}</span></div>`
+    })
+    .join('\n            ')
+
+  return `<section class="wide">
+          <p class="eyebrow">Debate transcript</p>
+          <p>The five-agent argument that produced this surface. Beat order: open, counter, settle, mic-drop.</p>
+          <div class="debate">
+            ${lineMarkup || '<p>No argument lines recorded.</p>'}
+          </div>
+          <div class="fingerprint">
+            <div><span>Lines exchanged</span><strong>${argumentLines.length}</strong></div>
+            <div><span>Times Lens objected</span><strong>${lensCount}</strong></div>
+            <div><span>Last word</span><strong>${escapeHtml(agentDisplayName(lastSpeaker ?? 'wild'))}</strong></div>
+          </div>
+          <div class="closing">
+            <p class="eyebrow" style="margin:0;">Closing fingerprint</p>
+            ${closingMarkup || '<p>No closing lines recorded.</p>'}
+          </div>
+          <p class="tagline">&ldquo;${escapeHtml(tagline || 'Five agents, one surface, no dashboard.')}&rdquo;</p>
+        </section>`
+}
+
+function renderArgumentTranscript(
+  request: ExportArtifactRequest,
+  manifest: Record<string, unknown>,
+): string {
+  const title = asString(manifest.title) ?? request.useCase?.title ?? 'Generated Surface'
+  const lines = readArgumentLines(manifest)
+  const closing = readClosingLines(manifest)
+  const tagline = readReceiptTagline(manifest)
+  const lensCount = lines.filter((line) => line.agent === 'lens').length
+  const lastSpeaker = lines[lines.length - 1]?.agent
+
+  const transcript = lines.length > 0
+    ? lines
+        .map((line, index) => {
+          const name = agentDisplayName(line.agent)
+          const role = agentRoleName(line.agent)
+          const beat = line.beat ? ` _(${line.beat})_` : ''
+          const text = line.text ?? ''
+          return `${index + 1}. **${name}** (${role})${beat}: ${text}`
+        })
+        .join('\n')
+    : '_No argument lines were recorded for this run._'
+
+  const closingBlock = closing.length > 0
+    ? closing
+        .map((line) => `- **${agentDisplayName(line.agent)}:** ${line.text ?? ''}`)
+        .join('\n')
+    : '_No closing lines recorded._'
+
+  return `# ${title} - Argument transcript
+
+## What this is
+The five-agent debate that produced the approved surface. AgenticPrime renders the swarm out loud during generation; this file is the durable record so the disagreement does not vanish with the dissolve.
+
+## Tagline
+> ${tagline || 'Five agents, one surface, no dashboard.'}
+
+## Argument
+${transcript}
+
+## Argument fingerprint
+- Lines exchanged: **${lines.length}**
+- Times Lens objected: **${lensCount}**
+- Last word: **${agentDisplayName(lastSpeaker ?? 'wild')}**
+
+## Closing lines (in order)
+${closingBlock}
+
+## Generated by
+Five arguing dinosaurs. Disagreement is the architecture.
 `
 }
 
@@ -565,6 +782,12 @@ function renderStandaloneSurface(
   const title = asString(manifest.title) || request.useCase?.title || 'AgenticPrime Surface'
   const subtitle = asString(manifest.subtitle) || request.useCase?.summary || ''
   const blocks = Array.isArray(manifest.blocks) ? manifest.blocks.filter(isRecord) : []
+  const argumentLines = readArgumentLines(manifest)
+  const closingLines = readClosingLines(manifest)
+  const tagline = readReceiptTagline(manifest)
+  const lensCount = argumentLines.filter((line) => line.agent === 'lens').length
+  const lastSpeaker = argumentLines[argumentLines.length - 1]?.agent
+  const debateSection = renderDebateSection(argumentLines, closingLines, tagline, lensCount, lastSpeaker)
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -613,6 +836,29 @@ function renderStandaloneSurface(
       .timeline-item:before { counter-increment: step; content: counter(step); width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: #03111f; background: var(--cyan); font-weight: 900; }
       .console { max-height: 260px; overflow: auto; padding: 14px; border-radius: 16px; background: #020617; }
       .console code { display: block; margin-bottom: 6px; color: #a7f3d0; }
+      .debate { display: grid; gap: 10px; }
+      .debate-line { display: grid; gap: 4px; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.16); border-left: 3px solid var(--author-color, var(--cyan)); border-radius: 14px; background: rgba(2, 6, 23, 0.6); color: var(--text); }
+      .debate-line.beat-counter { background: linear-gradient(0deg, rgba(247, 209, 84, 0.06), rgba(247, 209, 84, 0.06)), rgba(2, 6, 23, 0.7); }
+      .debate-line.beat-settle { background: linear-gradient(0deg, rgba(48, 213, 200, 0.06), rgba(48, 213, 200, 0.06)), rgba(2, 6, 23, 0.7); }
+      .debate-line.beat-mic-drop { background: linear-gradient(0deg, rgba(244, 114, 182, 0.1), rgba(244, 114, 182, 0.1)), rgba(2, 6, 23, 0.78); }
+      .debate-meta { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; color: var(--muted); }
+      .debate-meta strong { color: var(--author-color, var(--cyan)); font-weight: 900; letter-spacing: 0.04em; }
+      .debate-text { margin: 0; color: var(--text); font-size: 0.94rem; }
+      .agent-sage { --author-color: var(--violet); }
+      .agent-forge { --author-color: var(--cyan); }
+      .agent-lens { --author-color: var(--amber); }
+      .agent-echo { --author-color: #e2e8f0; }
+      .agent-wild { --author-color: #f472b6; }
+      .fingerprint { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+      .fingerprint > div { padding: 10px 12px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 14px; background: rgba(15, 23, 42, 0.6); }
+      .fingerprint span { display: block; color: var(--muted); font-size: 0.7rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+      .fingerprint strong { color: var(--text); font-size: 1.08rem; }
+      .closing { display: grid; gap: 6px; margin-top: 14px; padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(2, 6, 23, 0.6); }
+      .closing-line { display: flex; gap: 8px; padding: 4px 0; border-bottom: 1px dashed rgba(148, 163, 184, 0.12); }
+      .closing-line:last-child { border-bottom: none; }
+      .closing-line strong { color: var(--author-color, var(--cyan)); font-weight: 900; }
+      .closing-line span { color: var(--muted); font-style: italic; }
+      .tagline { margin: 14px 0 0; padding: 12px 14px; border-left: 3px solid #f472b6; border-radius: 0 14px 14px 0; background: rgba(244, 114, 182, 0.08); color: var(--text); font-style: italic; }
       .footer { margin: 22px 0 0; color: var(--muted); font-size: 0.9rem; }
       @media (max-width: 900px) { body { padding: 18px; } .hero { grid-template-columns: 1fr; } section, section.third { grid-column: span 12; } }
     </style>
@@ -642,8 +888,9 @@ function renderStandaloneSurface(
             ${steps.map((step) => `<div class="timeline-item"><div><strong>${escapeHtml(step.title)}</strong><p>${escapeHtml(step.detail)}</p></div></div>`).join('\n            ')}
           </div>
         </section>
+        ${debateSection}
       </div>
-      <p class="footer">Generated locally by AgenticPrime. This packet is an organized draft, not legal advice.</p>
+      <p class="footer">Generated locally by AgenticPrime. Five agents argued. The app appeared. Then it dissolved on purpose.</p>
     </main>
   </body>
 </html>
@@ -857,6 +1104,12 @@ ${steps.map((step, index) => `${index + 1}. **${step.title}** - ${step.detail}`)
 - [ ] Calendar follow-up deadline 7 days after sending.
 - [ ] Prepare small-claims filing or tenant advocacy intake if no response.
 `,
+    },
+    {
+      name: 'argument-transcript.md',
+      label: 'Argument transcript',
+      purpose: 'The five-agent debate that produced the dispute workspace, plus closing fingerprint.',
+      content: renderArgumentTranscript(request, manifest),
     },
     {
       name: 'surface.html',
