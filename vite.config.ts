@@ -45,6 +45,22 @@ export default defineConfig({
           }
         })
 
+        server.middlewares.use('/api/web-resources', async (req, res) => {
+          if (req.method !== 'POST') {
+            writeJson(res, 405, { error: 'Method not allowed.' })
+            return
+          }
+
+          try {
+            const request = await readJson<WebResourceRequest>(req)
+            const resources = await buildWebResources(request)
+            writeJson(res, 200, { resources })
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unknown resource lookup error.'
+            writeJson(res, 500, { error: message })
+          }
+        })
+
         server.middlewares.use('/api/mcp/apps', async (req, res) => {
           if (req.method !== 'GET') {
             writeJson(res, 405, { error: 'Method not allowed.' })
@@ -98,6 +114,32 @@ type GenerateUiRequest = {
   useCase?: { id?: string; title?: string; summary?: string }
 }
 
+type AgentDraftCapability = {
+  id: string
+  name: string
+  kind:
+    | 'crm'
+    | 'research'
+    | 'messaging'
+    | 'calendar'
+    | 'finance'
+    | 'ops'
+    | 'browser'
+    | 'sensor'
+    | 'memory'
+    | 'creative'
+    | 'safety'
+    | 'commerce'
+    | 'social'
+    | 'health'
+  provider: string
+  description: string
+  permissions: string[]
+  inputs: string[]
+  confidence: number
+  latency: string
+}
+
 type AgentDraft = {
   title?: string
   subtitle?: string
@@ -120,6 +162,7 @@ type AgentDraft = {
   checklist?: Array<{ label: string; detail: string; checked: boolean }>
   consoleLines?: string[]
   agentTurns?: Array<{ agent: AgentVoice; text: string; capability: string; outcome: string }>
+  discoveredCapabilities?: AgentDraftCapability[]
 }
 
 type ExportArtifactRequest = {
@@ -137,6 +180,22 @@ type ArtifactReceipt = {
   folder: string
   files: Array<{ label: string; path: string; purpose: string }>
   summary: string
+}
+
+type WebResourceRequest = {
+  intent?: string
+  inputs?: unknown
+  useCase?: { id?: string; title?: string; summary?: string }
+}
+
+type WebResource = {
+  id: string
+  label: string
+  url: string
+  source: string
+  detail: string
+  urgency?: 'routine' | 'soon' | 'urgent'
+  imageUrl?: string
 }
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
@@ -353,7 +412,22 @@ The five agents:
 - Echo (synthesizer) - reconciles the swarm into one coherent UI
 - Wild (wildcard) - proposes the unexpected angle
 
-Use case context: ${JSON.stringify(request.useCase ?? {}, null, 2)}
+## PRIMARY JOB (never skip)
+PRIMARY SUBJECT: the user's intent below decides the domain for every narrative field (title, subtitle, hero, metrics, chart, executionSteps, checklist, approval, agentTurns, consoleLines).
+
+The preset "use case" JSON is only scaffolding: control field ids exist for sliders and demos. Names and labels of those controls MUST NOT lure you into a different topic. If user intent mentions adoption resources, bureaucracy, passports, journaling, hackathons—then ALL copy and tools MUST match that topic. Never echo salary negotiation (base pay, comps, counter-offers) unless the user intent is actually about negotiating compensation.
+
+REFERENCE CAPABILITIES (interaction pattern hints only—they are NOT marching orders—rewrite them in the user's topic or replace entirely inside discoveredCapabilities):
+${JSON.stringify(request.capabilities ?? [], null, 2)}
+
+Preset use case scaffolding (titles may suggest another domain—infer from USER INTENT instead):
+${JSON.stringify(request.useCase ?? {}, null, 2)}
+
+USER INTENT — this is what the interface is for — keep rereading while you generate JSON:
+"""${request.intent ?? ''}"""
+
+Current control values (bind metrics/steps loosely to these when plausible):
+${JSON.stringify(request.inputs ?? {}, null, 2)}
 
 Return ONLY valid JSON. No markdown. No commentary. Match this shape:
 {
@@ -368,27 +442,22 @@ Return ONLY valid JSON. No markdown. No commentary. Match this shape:
   "approval": {"title": string, "description": string, "risk": string, "actions": string[]},
   "checklist": [{"label": string, "detail": string, "checked": boolean}],
   "consoleLines": string[],
-  "agentTurns": [{"agent": "sage" | "forge" | "lens" | "echo" | "wild", "text": string, "capability": string, "outcome": string}]
+  "agentTurns": [{"agent": "sage" | "forge" | "lens" | "echo" | "wild", "text": string, "capability": string, "outcome": string}],
+  "discoveredCapabilities": [
+    {"id": string, "name": string, "kind": "crm" | "research" | "messaging" | "calendar" | "finance" | "ops" | "browser" | "sensor" | "memory" | "creative" | "safety" | "commerce" | "social" | "health", "provider": string, "description": string, "permissions": string[], "inputs": string[], "confidence": number, "latency": string}
+  ]
 }
 
 Rules:
+- discoveredCapabilities MUST have exactly five tools whose names/descriptions plainly fit USER INTENT—do not recycle unrelated demo tools left over from negotiating/sales patterns.
 - Generate a specific interface for THIS exact intent, not a generic dashboard.
 - Each section should feel like one of the five agents authored it (Sage frames, Forge builds, Lens critiques, Echo synthesizes, Wild surprises).
 - Make controls and actions feel executable; this is the surface a human will press to ship work.
 - Keep strings short enough to fit in cards. Avoid filler.
 - Use 3 metrics, 3-4 chart bars, 4 execution steps, 4 approval actions, 3 checklist items.
-- agentTurns must be 5-6 real turns in order: Sage -> Forge -> Lens -> Echo -> Wild -> Sage review. Each turn names a capability-like operation and an outcome.
+- agentTurns must be 5-6 real turns in order: Sage -> Forge -> Lens -> Echo -> Wild -> Sage review. Each turn names a capability-like operation and an outcome tied to USER INTENT.
 - Do not claim actions already happened; this is the pre-approval state.
-- consoleLines should be 3-5 short receipt-style lines starting with "> ".
-
-User intent:
-${request.intent ?? ''}
-
-Current control values:
-${JSON.stringify(request.inputs ?? {}, null, 2)}
-
-Discovered MCP-style capabilities:
-${JSON.stringify(request.capabilities ?? [], null, 2)}
+- consoleLines should be 3-5 short receipt-style lines starting with "> " referencing USER INTENT snippets when natural.
 `
 }
 
@@ -402,7 +471,7 @@ Repair instruction:
 - Return one minimal valid JSON object only.
 - Do not wrap it in markdown.
 - Use double-quoted JSON keys and string values.
-- Include title, subtitle, heroTitle, heroBody, chips, metrics, chart, executionSteps, approval, checklist, and consoleLines.
+- Include title, subtitle, heroTitle, heroBody, chips, metrics, chart, executionSteps, approval, checklist, consoleLines, and discoveredCapabilities (5 items tuned to USER INTENT).
 - If uncertain, use short safe placeholder strings rather than prose outside JSON.
 `
 }
@@ -519,7 +588,98 @@ function normalizeDraft(value: Record<string, unknown>): AgentDraft {
       }))
   }
 
+  if (Array.isArray(value.discoveredCapabilities)) {
+    const parsed = value.discoveredCapabilities
+      .filter(isRecord)
+      .slice(0, 8)
+      .map((raw, index) => normalizeDraftCapability(raw, index))
+      .filter((capability): capability is AgentDraftCapability => Boolean(capability))
+    if (parsed.length >= 4) {
+      draft.discoveredCapabilities = parsed
+    }
+  }
+
   return draft
+}
+
+function normalizeDraftCapability(record: Record<string, unknown>, index: number): AgentDraftCapability | undefined {
+  const name = asString(record.name)
+  if (!name) {
+    return undefined
+  }
+  const id = asString(record.id)?.replace(/\s+/g, '-') || slugify(name) || `discovered-${index + 1}`
+  const kind = toCapabilityKind(record.kind)
+
+  return {
+    id: id.slice(0, 56),
+    name: name.slice(0, 80),
+    kind,
+    provider: (asString(record.provider) ?? 'Frontend tool').slice(0, 64),
+    description: (asString(record.description) ?? 'Simulated tool surface wired to the swarm.').slice(0, 220),
+    permissions: asStringArray(record.permissions).slice(0, 6).length
+      ? asStringArray(record.permissions).slice(0, 6)
+      : defaultCapabilityPermissions(kind),
+    inputs: asStringArray(record.inputs).slice(0, 6),
+    confidence: asNumber(record.confidence),
+    latency: (asString(record.latency) ?? '1.0s').slice(0, 24),
+  }
+}
+
+function toCapabilityKind(value: unknown): AgentDraftCapability['kind'] {
+  const raw = asString(value)?.toLowerCase().replace(/\s+/g, '-').replace(/_/g, '-') ?? ''
+  switch (raw) {
+    case 'crm':
+    case 'research':
+    case 'messaging':
+    case 'calendar':
+    case 'finance':
+    case 'ops':
+    case 'browser':
+    case 'sensor':
+    case 'memory':
+    case 'creative':
+    case 'safety':
+    case 'commerce':
+    case 'social':
+    case 'health':
+      return raw
+    default:
+      return 'research'
+  }
+}
+
+function defaultCapabilityPermissions(kind: unknown): string[] {
+  const k = toCapabilityKind(kind)
+  switch (k) {
+    case 'messaging':
+      return ['Compose drafts']
+    case 'calendar':
+      return ['Plan milestones']
+    case 'browser':
+      return ['Open citations']
+    case 'creative':
+      return ['Draft summaries']
+    case 'finance':
+      return ['Read estimates']
+    case 'crm':
+      return ['Reference contacts']
+    case 'social':
+      return ['Search services']
+    case 'commerce':
+      return ['Compare listings']
+    case 'sensor':
+      return ['Preview inputs']
+    case 'memory':
+      return ['Recall notes']
+    case 'ops':
+      return ['Prepare packets']
+    case 'health':
+      return ['Educational resources only']
+    case 'safety':
+      return ['Flag escalations']
+    default:
+      return ['Read curated sources']
+  }
 }
 
 async function createArtifactPacket(request: ExportArtifactRequest, root: string): Promise<ArtifactReceipt> {
@@ -1024,6 +1184,26 @@ function renderSurfaceBlock(block: Record<string, unknown>): string {
         </section>`
   }
 
+  if (kind === 'resourceLauncher') {
+    const resources = getRecordArray(block.resources)
+    return `<section class="wide">
+          <p class="eyebrow">Real web resources</p>
+          <h2>${escapeHtml(title)}</h2>
+          <div class="card-grid">
+            ${resources.map((resource) => `<a class="card" href="${escapeHtml(asString(resource.url) || '#')}" target="_blank" rel="noreferrer"><strong>${escapeHtml(asString(resource.label) || 'Resource')}</strong><span class="pill">${escapeHtml(asString(resource.source) || 'Web')}</span><p>${escapeHtml(asString(resource.detail) || '')}</p></a>`).join('\n            ')}
+          </div>
+        </section>`
+  }
+
+  if (kind === 'imageIntake') {
+    return `<section>
+          <p class="eyebrow">Image intake</p>
+          <h2>${escapeHtml(title)}</h2>
+          <p>${escapeHtml(asString(block.description) || '')}</p>
+          <p class="pill">${escapeHtml(asString(block.caution) || 'Preview images in the live app.')}</p>
+        </section>`
+  }
+
   if (kind === 'form') {
     const fields = getRecordArray(block.fields)
     return `<section class="wide">
@@ -1269,6 +1449,201 @@ function buildAgUiEventStream(input: Record<string, unknown>) {
       { type: 'RUN_FINISHED', artifacts: ['demand-letter.html', 'evidence-index.json', 'case-timeline.md'] },
     ],
   }
+}
+
+async function buildWebResources(request: WebResourceRequest): Promise<WebResource[]> {
+  const useCase = findUseCase(request.useCase?.id ?? '')
+  const intent = request.intent?.trim() || useCase.intent
+  const lower = `${useCase.title} ${useCase.summary} ${intent}`.toLowerCase()
+  const curated = curatedResourcesFor(lower, intent)
+  const searchResources = await searchDuckDuckGo(intent || useCase.title).catch(() => [])
+  const merged = dedupeResources([...curated, ...searchResources]).slice(0, 8)
+  const previewed = await Promise.all(
+    merged.map(async (resource) => {
+      const preview = await scrapePagePreview(resource.url).catch(() => undefined)
+      return {
+        ...resource,
+        label: preview?.title || resource.label,
+        detail: preview?.description || resource.detail,
+        imageUrl: preview?.imageUrl || resource.imageUrl,
+      }
+    }),
+  )
+
+  return previewed
+}
+
+function curatedResourcesFor(lower: string, intent: string): WebResource[] {
+  if (isHealthResourceIntent(lower)) {
+    return [
+      {
+        id: 'hiv-gov-locator',
+        label: 'Find HIV care, testing, and services',
+        url: 'https://locator.hiv.gov/',
+        source: 'HIV.gov',
+        detail: 'Official US locator for testing, prevention, care, and support services.',
+        urgency: 'soon',
+      },
+      {
+        id: 'cdc-hiv-treatment',
+        label: 'HIV treatment basics',
+        url: 'https://www.cdc.gov/hiv/treatment/index.html',
+        source: 'CDC',
+        detail: 'CDC overview of treatment. This is educational, not a prescription.',
+        urgency: 'soon',
+      },
+      {
+        id: 'nih-hiv-medicines',
+        label: 'HIV medicines and side effects',
+        url: 'https://hivinfo.nih.gov/understanding-hiv/fact-sheets/hiv-medicines-and-side-effects',
+        source: 'NIH HIVinfo',
+        detail: 'NIH medicine overview to discuss with a clinician or pharmacist.',
+        urgency: 'routine',
+      },
+      {
+        id: 'medlineplus',
+        label: 'MedlinePlus health topics',
+        url: `https://medlineplus.gov/search/?query=${encodeURIComponent(intent)}`,
+        source: 'MedlinePlus',
+        detail: 'NIH consumer health information and topic search.',
+        urgency: 'routine',
+      },
+      {
+        id: 'emergency-911',
+        label: 'Emergency help',
+        url: 'https://www.911.gov/',
+        source: '911.gov',
+        detail: 'If symptoms are severe, immediate, or life-threatening, seek emergency care now.',
+        urgency: 'urgent',
+      },
+    ]
+  }
+
+  return [
+    {
+      id: 'duckduckgo-direct',
+      label: 'Open web search',
+      url: `https://duckduckgo.com/?q=${encodeURIComponent(intent)}`,
+      source: 'DuckDuckGo',
+      detail: 'A real search page for source discovery. Verify before acting.',
+      urgency: 'routine',
+    },
+    {
+      id: 'perplexity-direct',
+      label: 'Open source-backed answer search',
+      url: `https://www.perplexity.ai/search?q=${encodeURIComponent(intent)}`,
+      source: 'Perplexity',
+      detail: 'Useful for finding citations and summaries in a browser tab.',
+      urgency: 'routine',
+    },
+  ]
+}
+
+async function searchDuckDuckGo(query: string): Promise<WebResource[]> {
+  const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1`
+  const json = await fetchJson(url, { method: 'GET', headers: { Accept: 'application/json' } })
+  if (!isRecord(json)) {
+    return []
+  }
+
+  const resources: WebResource[] = []
+  const abstractUrl = asString(json.AbstractURL)
+  if (abstractUrl) {
+    resources.push({
+      id: `ddg-${slugify(abstractUrl)}`,
+      label: asString(json.Heading) || 'DuckDuckGo result',
+      url: abstractUrl,
+      source: asString(json.AbstractSource) || 'DuckDuckGo',
+      detail: asString(json.AbstractText) || 'Search result returned by DuckDuckGo.',
+      urgency: 'routine',
+      imageUrl: toAbsoluteImageUrl(asString(json.Image), abstractUrl),
+    })
+  }
+
+  const related = Array.isArray(json.RelatedTopics) ? json.RelatedTopics : []
+  for (const topic of related) {
+    const records = isRecord(topic) && Array.isArray(topic.Topics) ? topic.Topics : [topic]
+    for (const record of records) {
+      if (!isRecord(record)) continue
+      const firstUrl = asString(record.FirstURL)
+      if (!firstUrl) continue
+      resources.push({
+        id: `ddg-${slugify(firstUrl)}`,
+        label: asString(record.Text)?.split(' - ')[0] || 'Related web resource',
+        url: firstUrl,
+        source: 'DuckDuckGo',
+        detail: asString(record.Text) || 'Related topic returned by DuckDuckGo.',
+        urgency: 'routine',
+        imageUrl: toAbsoluteImageUrl(asString(readPath(record, ['Icon', 'URL'])), firstUrl),
+      })
+      if (resources.length >= 4) return resources
+    }
+  }
+
+  return resources
+}
+
+async function scrapePagePreview(url: string): Promise<{ title?: string; description?: string; imageUrl?: string }> {
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml',
+      'User-Agent': 'AgenticPrimeResourcePreview/1.0',
+    },
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (!response.ok) {
+    throw new Error(`Preview failed: ${response.status}`)
+  }
+  const html = (await response.text()).slice(0, 250_000)
+  const title = readMeta(html, 'og:title') || readTitle(html)
+  const description = readMeta(html, 'og:description') || readMeta(html, 'description')
+  const imageUrl = toAbsoluteImageUrl(readMeta(html, 'og:image') || readMeta(html, 'twitter:image'), url)
+  return { title, description, imageUrl }
+}
+
+function dedupeResources(resources: WebResource[]): WebResource[] {
+  const seen = new Set<string>()
+  return resources.filter((resource) => {
+    const key = resource.url.replace(/\/+$/, '')
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function readMeta(html: string, name: string): string | undefined {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const propertyPattern = new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i')
+  const contentFirstPattern = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${escaped}["'][^>]*>`, 'i')
+  return decodeHtml(propertyPattern.exec(html)?.[1] || contentFirstPattern.exec(html)?.[1] || '')
+}
+
+function readTitle(html: string): string | undefined {
+  return decodeHtml(/<title[^>]*>([^<]+)<\/title>/i.exec(html)?.[1] || '')
+}
+
+function decodeHtml(value: string): string | undefined {
+  const decoded = value
+    .replaceAll('&amp;', '&')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#39;', "'")
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .trim()
+  return decoded || undefined
+}
+
+function toAbsoluteImageUrl(value: string | undefined, pageUrl: string): string | undefined {
+  if (!value) return undefined
+  try {
+    return new URL(value, pageUrl).toString()
+  } catch {
+    return undefined
+  }
+}
+
+function isHealthResourceIntent(lower: string): boolean {
+  return /health|medicine|medication|doctor|clinic|symptom|aids|hiv|prescription|pharmacy|drug|illness|infection|pain|urgent care/.test(lower)
 }
 
 function exportDepositRuleFor(state: string): { days: number; copy: string } {

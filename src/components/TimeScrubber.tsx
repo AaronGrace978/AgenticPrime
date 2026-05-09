@@ -50,12 +50,12 @@ export function TimeScrubber({ totalFrames, currentFrame, meta, onScrub, onRepla
         min={0}
         max={safeTotal}
         step={1}
-        value={currentFrame}
+        value={Math.min(Math.max(currentFrame, 0), safeTotal)}
         onChange={(event) => onScrub(Number(event.target.value))}
         aria-label="Scrub generation"
       />
       <p className="scrubber-status">
-        Frame {currentFrame} of {safeTotal}
+        Frame {Math.min(Math.max(currentFrame, 0), safeTotal)} of {safeTotal}
       </p>
     </section>
   )

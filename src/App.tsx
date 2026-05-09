@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import './App.css'
 import './Redesign.css'
 import { agentRoster } from './agents'
@@ -17,8 +18,9 @@ import {
 } from './manifestBuilder'
 import { buildOfflineDraft } from './offlineDrafts'
 import { findProvider, providerOptions, providerTip, type ProviderId } from './providers'
+import { suggestUseCaseRouting } from './intentRouting'
 import { findUseCase, useCases } from './useCases'
-import type { AgentDraft, AgentVoice, ArtifactReceipt, ExecutionStep, UiBlock, UseCaseDefinition } from './types'
+import type { AgentDraft, AgentVoice, ArtifactReceipt, ExecutionStep, UiBlock, UseCaseDefinition, WebResource } from './types'
 
 type Stage = 'idle' | 'generating' | 'ready' | 'executing' | 'done' | 'dissolving' | 'dissolved'
 
@@ -42,6 +44,8 @@ function App() {
   const [generationError, setGenerationError] = useState('')
   const [artifactReceipt, setArtifactReceipt] = useState<ArtifactReceipt | undefined>()
   const [disputedBlockId, setDisputedBlockId] = useState<string | undefined>(undefined)
+  const [webResources, setWebResources] = useState<WebResource[]>([])
+  const [isFindingResources, setIsFindingResources] = useState(false)
 
   const [provider, setProvider] = useState<ProviderId>('offline')
   const [apiKey, setApiKey] = useState('')
@@ -58,6 +62,8 @@ function App() {
   const streamTimerRef = useRef<number | undefined>(undefined)
   const generationControllerRef = useRef<AbortController | undefined>(undefined)
   const generationRequestRef = useRef(0)
+  /** Bumped each generateSurface run so stale /api/web-resources responses are ignored */
+  const resourceFetchRunRef = useRef(0)
 
   const selectedProvider = findProvider(provider)
   const hasProviderCredential = !selectedProvider.requiresKey || apiKey.trim().length > 0
@@ -73,10 +79,15 @@ function App() {
         agentDraft,
         intent,
         providerLabel: selectedProvider.label,
+        webResources,
       }),
-    [useCase, inputs, executionSteps, agentDraft, intent, selectedProvider.label],
+    [useCase, inputs, executionSteps, agentDraft, intent, selectedProvider.label, webResources],
   )
   const totalBlocks = manifest.blocks.length
+
+  /** Avoid stale manifest during batched/streaming transitions (unsupported vs full manifest block counts). */
+  const manifestRef = useRef(manifest)
+  manifestRef.current = manifest
 
   useEffect(
     () => () => {
@@ -110,27 +121,31 @@ function App() {
     setDisputedBlockId(undefined)
     streamTimerRef.current = window.setInterval(() => {
       setVisibleBlocks((current) => {
-        if (current >= targetCount) {
+        const snapshot = manifestRef.current
+        const cap = Math.max(snapshot.blocks.length, 1)
+        const resolvedTarget = Math.min(Math.max(targetCount, 0), cap)
+
+        if (current >= resolvedTarget) {
           if (streamTimerRef.current !== undefined) {
             window.clearInterval(streamTimerRef.current)
             streamTimerRef.current = undefined
           }
           setActiveAuthor(undefined)
           setStage('ready')
-          return current
+          return resolvedTarget
         }
 
-        const nextCount = current + 1
-        const nextBlock = manifest.blocks[nextCount - 1]
-        const nextMeta = manifest.meta[nextBlock?.id ?? '']
+        const nextCount = Math.min(current + 1, resolvedTarget)
+        const nextBlock = snapshot.blocks[nextCount - 1]
+        const nextMeta = snapshot.meta[nextBlock?.id ?? '']
         if (nextMeta) {
           setActiveAuthor(nextMeta.author)
         }
         if (
-          manifest.disputeBlockId &&
-          nextBlock?.id === manifest.disputeBlockId
+          snapshot.disputeBlockId &&
+          nextBlock?.id === snapshot.disputeBlockId
         ) {
-          setDisputedBlockId(manifest.disputeBlockId)
+          setDisputedBlockId(snapshot.disputeBlockId)
           window.setTimeout(() => setDisputedBlockId(undefined), DISPUTE_PULSE_MS)
         }
         return nextCount
@@ -143,20 +158,33 @@ function App() {
       return
     }
 
-    const unsupportedReason = unsupportedReasonFor(useCase.id, intent)
+    const trimmedMission = intent.trim()
+    let genUseCase = useCase
+    let genInputs = inputs
+
+    const routing = suggestUseCaseRouting(genUseCase.id, trimmedMission)
+    if (routing) {
+      flushSync(() => pickUseCase(routing.toId, trimmedMission))
+      genUseCase = findUseCase(routing.toId)
+      genInputs = defaultInputsFor(genUseCase)
+      setProviderStatus(`Auto-prioritized use case → ${routing.label}`)
+      window.setTimeout(() => setProviderStatus(''), 3200)
+    }
+
+    const unsupportedReason = unsupportedReasonFor(genUseCase.id, trimmedMission || intent)
     if (unsupportedReason) {
       setStage('generating')
       setGenerationError(unsupportedReason)
       setProviderStatus('')
-      setExecutionSteps(emptyExecutionSteps(useCase))
+      setExecutionSteps(emptyExecutionSteps(genUseCase))
       setVisibleBlocks(0)
       setArtifactReceipt(undefined)
       setAgentDraft({
         title: 'Unsupported request',
         subtitle: unsupportedReason,
         consoleLines: [
-          `> unsupported intent :: ${intent}`,
-          '> no Outlook / browser automation tool is wired',
+          `> unsupported intent :: ${trimmedMission || intent}`,
+          '> mailbox or browser automation is not wired for this sandbox',
           '> generated routing guard instead of pretending',
         ],
       })
@@ -166,15 +194,36 @@ function App() {
 
     setStage('generating')
     setGenerationError('')
-    setProviderStatus('')
-    setExecutionSteps(emptyExecutionSteps(useCase))
+    if (!routing) {
+      setProviderStatus('')
+    }
+    setExecutionSteps(emptyExecutionSteps(genUseCase))
     setVisibleBlocks(0)
     setGenerationElapsedSeconds(0)
     setArtifactReceipt(undefined)
 
+    resourceFetchRunRef.current += 1
+    const resourceRunId = resourceFetchRunRef.current
+    void loadWebResources({
+      silent: true,
+      runId: resourceRunId,
+      payload: {
+        intent: trimmedMission || intent,
+        inputs: genInputs,
+        useCase: genUseCase,
+      },
+    })
+
     if (provider === 'offline') {
       setProviderStatus('Offline agents are operating locally. No network call will be made.')
-      setAgentDraft(buildOfflineDraft({ useCase, inputs, intent, chaos: offlineChaos }))
+      setAgentDraft(
+        buildOfflineDraft({
+          useCase: genUseCase,
+          inputs: genInputs,
+          intent: trimmedMission || intent,
+          chaos: offlineChaos,
+        }),
+      )
       window.setTimeout(() => {
         setProviderStatus('')
         startStreaming(totalBlocks, offlineStreamInterval(offlineChaos))
@@ -198,12 +247,12 @@ function App() {
         body: JSON.stringify({
           apiKey,
           baseUrl,
-          capabilities: useCase.capabilities,
-          inputs,
-          intent,
+          capabilities: genUseCase.capabilities,
+          inputs: genInputs,
+          intent: trimmedMission || intent,
           model,
           provider,
-          useCase: { id: useCase.id, title: useCase.title, summary: useCase.summary },
+          useCase: { id: genUseCase.id, title: genUseCase.title, summary: genUseCase.summary },
         }),
       })
       const payload = (await response.json()) as { draft?: AgentDraft; error?: string }
@@ -234,13 +283,15 @@ function App() {
       const display = tip ? `${message}\n\nTip: ${tip}` : message
       setGenerationError(display)
       setProviderStatus('')
-      setAgentDraft(buildOfflineDraft({
-        useCase,
-        inputs,
-        intent,
-        chaos: offlineChaos,
-        reason: `Live provider failed, so the offline swarm took over. ${message}`,
-      }))
+      setAgentDraft(
+        buildOfflineDraft({
+          useCase: genUseCase,
+          inputs: genInputs,
+          intent: trimmedMission || intent,
+          chaos: offlineChaos,
+          reason: `Live provider failed, so the offline swarm took over. ${message}`,
+        }),
+      )
       startStreaming(totalBlocks, offlineStreamInterval(offlineChaos))
     } finally {
       window.clearTimeout(timeoutId)
@@ -282,6 +333,78 @@ function App() {
       ...current,
       [fieldId]: value,
     }))
+  }
+
+  type LoadResourcesPayload = {
+    intent: string
+    inputs: Record<string, string | number>
+    useCase: UseCaseDefinition
+  }
+
+  type LoadResourcesOptions = {
+    silent?: boolean
+    /** When set, ignore response if generate was restarted */
+    runId?: number
+    /** Avoid stale use-case closures right after Generate auto-routed the operator */
+    payload?: LoadResourcesPayload
+  }
+
+  /** Fetches scraped real web resources. During generation pass silent:true so LLM/provider status stays visible. */
+  async function loadWebResources(options: LoadResourcesOptions = {}) {
+    const { silent = false, runId, payload } = options
+
+    const effectiveIntent = payload?.intent ?? intent
+    const effectiveInputs = payload?.inputs ?? inputs
+    const effectiveUseCase = payload?.useCase ?? useCase
+
+    if (!silent) {
+      if (isFindingResources) {
+        return
+      }
+      setIsFindingResources(true)
+      setProviderStatus('Searching real web resources and scraping page previews.')
+    }
+
+    try {
+      const response = await fetch('/api/web-resources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          intent: effectiveIntent,
+          inputs: effectiveInputs,
+          useCase: { id: effectiveUseCase.id, title: effectiveUseCase.title, summary: effectiveUseCase.summary },
+        }),
+      })
+      const payload = (await response.json()) as { resources?: WebResource[]; error?: string }
+
+      if (typeof runId === 'number' && runId !== resourceFetchRunRef.current) {
+        return
+      }
+
+      if (!response.ok || !payload.resources) {
+        throw new Error(payload.error ?? 'Resource lookup failed.')
+      }
+
+      setWebResources(payload.resources)
+      if (!silent) {
+        setProviderStatus(`Loaded ${payload.resources.length} real web resource${payload.resources.length === 1 ? '' : 's'}.`)
+        window.setTimeout(() => setProviderStatus(''), 2400)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown resource lookup error.'
+      if (!silent) {
+        setGenerationError(`Resource lookup failed: ${message}`)
+        setProviderStatus('')
+      }
+    } finally {
+      if (!silent) {
+        setIsFindingResources(false)
+      }
+    }
+  }
+
+  function findRealResources() {
+    void loadWebResources({ silent: false })
   }
 
   async function exportApprovedPacket(completedSteps: ExecutionStep[]) {
@@ -381,7 +504,7 @@ function App() {
     }
   }
 
-  function pickUseCase(nextId: string) {
+  function pickUseCase(nextId: string, keepMissionFromIntent?: string) {
     if (nextId === useCaseId) {
       return
     }
@@ -392,9 +515,13 @@ function App() {
     }
 
     const nextUseCase = findUseCase(nextId)
+    const nextIntent =
+      typeof keepMissionFromIntent === 'string' && keepMissionFromIntent.trim()
+        ? keepMissionFromIntent.trim()
+        : nextUseCase.intent
     setUseCaseId(nextId)
     setInputs(defaultInputsFor(nextUseCase))
-    setIntent(nextUseCase.intent)
+    setIntent(nextIntent)
     setExecutionSteps(emptyExecutionSteps(nextUseCase))
     setAgentDraft(undefined)
     setArtifactReceipt(undefined)
@@ -404,6 +531,7 @@ function App() {
     setGenerationError('')
     setProviderStatus('')
     setDisputedBlockId(undefined)
+    setWebResources([])
   }
 
   function reforge() {
@@ -451,6 +579,13 @@ function App() {
             onChange={(event) => setIntent(event.target.value)}
             rows={3}
           />
+          <p className="intent-scaffolding-note">
+            The use case card sets the control layout and demo tools; this box is the mission. Models and prompts always
+            treat this textarea first. On Generate we may{' '}
+            <strong>auto-switch the highlighted use case card</strong> when your wording obviously matches another operator (for
+            example burgers while Security Deposit was selected—you would land on the hackathon co-pilot sprint card). Pick
+            manually when you disagree.
+          </p>
           <PromptAssist useCaseTitle={useCase.title} onPick={setIntent} />
           <div className="intent-actions">
             <button
@@ -459,6 +594,14 @@ function App() {
               onClick={() => setIntent(useCase.intent)}
             >
               Restore use-case intent
+            </button>
+            <button
+              className="secondary-action"
+              disabled={isFindingResources}
+              type="button"
+              onClick={findRealResources}
+            >
+              {isFindingResources ? 'Finding resources...' : 'Find real resources'}
             </button>
             <button
               className="primary-action"
@@ -594,19 +737,35 @@ function App() {
 }
 
 function unsupportedReasonFor(useCaseId: string, intent: string): string | null {
-  const lower = intent.toLowerCase()
-  const asksForExternalApp =
-    /\boutlook\b|\bemail\b|\bgmail\b|\binbox\b|\bbrowser\b|\bopen\b|\bclick\b|\bdownload\b/.test(lower)
-  const isSecurityDepositIntent =
-    /deposit|landlord|tenant|lease|rent|property manager|move-out|move out/.test(lower)
+  /** Only refuse when automation is requested; unrelated topics adapt via the generator. */
+  if (useCaseId !== 'security-deposit-dispute') {
+    return null
+  }
+  if (!asksUnwiredMailboxOrBrowserAutomation(intent)) {
+    return null
+  }
+  return 'This operator does not expose your mailbox or automated browser clicks. Reword for the deposit-law workflow without live Outlook/Gmail/login automation—or add those tools upstream with approval gates.'
+}
 
-  if (useCaseId === 'security-deposit-dispute' && !isSecurityDepositIntent) {
-    return asksForExternalApp
-      ? 'This selected operator handles security-deposit disputes, not Outlook/browser automation. Pick or build an Email Operator with a real mail/browser tool before clicking emails.'
-      : 'This intent does not match the selected Security Deposit Dispute operator. Pick a matching use case or restore the use-case intent.'
+function asksUnwiredMailboxOrBrowserAutomation(text: string): boolean {
+  const lower = text.toLowerCase()
+
+  if (/\boutlook\b|\bmicrosoft\s*graph\b|\bexchange\b(?:\s+server)?|\boffice\s*365\s*mail\b/.test(lower)) {
+    return true
   }
 
-  return null
+  if (/\bigmail\b(?!\s+address\b).*(\binbox\b|\bmessages\b|\bthreads\b)/.test(lower)) {
+    return true
+  }
+
+  if (
+    /\b(open|launch|pull|summarize)\b[^\n.!?]{0,80}\b(inbox|unread\s+threads|mailbox|email\s+(?:conversation|threads))\b/i.test(lower)
+    || /\b(read|check)\b[^\n.!?]{0,48}\b(inbox|my\s+mailbox|my\s+gmail)\b/i.test(lower)
+  ) {
+    return true
+  }
+
+  return /\bbrowser\b[^\n.!?]{0,40}\b(automat(e|ic)|scrap(e|ing)|control)\b|\b(automat(e|ic)|scrap(e|ing))[^\n.!?]{0,40}\bbrowser\b/.test(lower)
 }
 
 function plannedStepsFromManifest(blocks: UiBlock[], useCase: UseCaseDefinition): ExecutionStep[] {

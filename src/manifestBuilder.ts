@@ -16,6 +16,7 @@ import type {
   UiBlock,
   UiManifest,
   UseCaseDefinition,
+  WebResource,
 } from './types'
 
 export type ManifestArgs = {
@@ -25,6 +26,15 @@ export type ManifestArgs = {
   agentDraft?: AgentDraft
   intent: string
   providerLabel: string
+  webResources?: WebResource[]
+}
+
+function capabilityGridFromDraft(agentDraft: AgentDraft | undefined, useCase: UseCaseDefinition): Capability[] {
+  const discovered = agentDraft?.discoveredCapabilities
+  if (discovered && discovered.length >= 4) {
+    return discovered.slice(0, 8)
+  }
+  return useCase.capabilities
 }
 
 export function buildManifest({
@@ -34,6 +44,7 @@ export function buildManifest({
   agentDraft,
   intent,
   providerLabel,
+  webResources = [],
 }: ManifestArgs): UiManifest {
   if (agentDraft?.title === 'Unsupported request') {
     return buildUnsupportedIntentManifest({ useCase, intent, agentDraft, providerLabel })
@@ -64,10 +75,11 @@ export function buildManifest({
   const completedSteps = visibleExecutionSteps.filter((step) => step.status === 'done').length
   const isComplete = visibleExecutionSteps.length > 0 && completedSteps === visibleExecutionSteps.length
   const runningStep = visibleExecutionSteps.find((step) => step.status === 'running')
+  const capabilityGrid = capabilityGridFromDraft(agentDraft, useCase)
 
   const consoleLines = buildConsoleLines({
     useCase,
-    capabilities: useCase.capabilities,
+    capabilities: capabilityGrid,
     steps: visibleExecutionSteps,
     extraLines: agentDraft?.consoleLines,
     providerLabel,
@@ -86,7 +98,22 @@ export function buildManifest({
       id: 'capabilities',
       kind: 'capabilityGrid',
       title: 'Discovered capability stack',
-      capabilities: useCase.capabilities,
+      capabilities: capabilityGrid,
+    },
+    {
+      id: 'resources',
+      kind: 'resourceLauncher',
+      title: resourceTitleFor(intent),
+      description: resourceDescriptionFor(intent),
+      resources: webResources.length ? webResources : defaultResourcesFor(useCase, intent),
+    },
+    {
+      id: 'images',
+      kind: 'imageIntake',
+      title: 'Image and screenshot intake',
+      description: imageIntakeDescriptionFor(intent),
+      accepted: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+      caution: 'Images are previewed in-browser. AgenticPrime does not diagnose medical images, verify identity documents, or make legal findings from images.',
     },
     {
       id: 'controls',
@@ -146,6 +173,8 @@ export function buildManifest({
   const authors: Record<string, AgentVoice> = {
     hero: 'sage',
     capabilities: 'forge',
+    resources: 'sage',
+    images: 'forge',
     controls: 'forge',
     metrics: 'echo',
     chart: 'echo',
@@ -258,6 +287,114 @@ function buildUnsupportedIntentManifest({
   }
 }
 
+function isDepositOrTenantIntent(intent: string): boolean {
+  const lower = intent.toLowerCase()
+  return /deposit|security deposit|landlord|tenant|lease|rent|eviction|property manager|move-?out|withhold|itemized|damage claim/.test(
+    lower,
+  )
+}
+
+function defaultResourcesFor(useCase: UseCaseDefinition, intent: string): WebResource[] {
+  const lower = `${useCase.title} ${useCase.summary} ${intent}`.toLowerCase()
+
+  if (isHealthIntent(lower)) {
+    return [
+      {
+        id: 'hiv-gov-care',
+        label: 'Find HIV care and services',
+        url: 'https://locator.hiv.gov/',
+        source: 'HIV.gov',
+        detail: 'US locator for testing, prevention, treatment, and support services.',
+        urgency: 'soon',
+      },
+      {
+        id: 'cdc-hiv-treatment',
+        label: 'HIV treatment basics',
+        url: 'https://www.cdc.gov/hiv/treatment/index.html',
+        source: 'CDC',
+        detail: 'Plain-language overview of treatment and why care should start quickly.',
+        urgency: 'soon',
+      },
+      {
+        id: 'hivinfo-medicines',
+        label: 'HIV medicines overview',
+        url: 'https://hivinfo.nih.gov/understanding-hiv/fact-sheets/hiv-medicines-and-side-effects',
+        source: 'NIH HIVinfo',
+        detail: 'Medication information from NIH. Use with a clinician or pharmacist.',
+        urgency: 'routine',
+      },
+      {
+        id: 'emergency-care',
+        label: 'Emergency care',
+        url: 'https://www.911.gov/',
+        source: '911.gov',
+        detail: 'If symptoms are severe or immediate danger is present, seek emergency help now.',
+        urgency: 'urgent',
+      },
+    ]
+  }
+
+  if (useCase.id === 'security-deposit-dispute' && isDepositOrTenantIntent(intent)) {
+    return [
+      {
+        id: 'consumerfinance-housing',
+        label: 'Housing complaint resources',
+        url: 'https://www.consumerfinance.gov/consumer-tools/renting/',
+        source: 'CFPB',
+        detail: 'Federal renter resources and complaint pathways.',
+        urgency: 'routine',
+      },
+      {
+        id: 'lawhelp',
+        label: 'Find local legal help',
+        url: 'https://www.lawhelp.org/',
+        source: 'LawHelp',
+        detail: 'Directory for legal aid and tenant resources by state.',
+        urgency: 'soon',
+      },
+    ]
+  }
+
+  return [
+    {
+      id: 'duckduckgo-search',
+      label: `Search the web for ${useCase.title}`,
+      url: `https://duckduckgo.com/?q=${encodeURIComponent(intent || useCase.title)}`,
+      source: 'DuckDuckGo',
+      detail: 'Opens a real web search in a new tab. Review sources before acting.',
+      urgency: 'routine',
+    },
+    {
+      id: 'perplexity-search',
+      label: 'Ask a web answer engine',
+      url: `https://www.perplexity.ai/search?q=${encodeURIComponent(intent || useCase.title)}`,
+      source: 'Perplexity',
+      detail: 'Useful for quickly finding sources, links, and summaries.',
+      urgency: 'routine',
+    },
+  ]
+}
+
+function resourceTitleFor(intent: string): string {
+  return isHealthIntent(intent.toLowerCase()) ? 'Care and resource launcher' : 'Real web launcher'
+}
+
+function resourceDescriptionFor(intent: string): string {
+  return isHealthIntent(intent.toLowerCase())
+    ? 'Open trusted medical resources and care locators. This is not diagnosis or prescription guidance.'
+    : 'Open real webpages in new tabs. The app launches sources; it does not claim external actions happened.'
+}
+
+function imageIntakeDescriptionFor(intent: string): string {
+  return isHealthIntent(intent.toLowerCase())
+    ? 'Preview screenshots, labels, forms, or medication photos for discussion with a qualified clinician or pharmacist.'
+    : 'Preview screenshots, references, evidence, or source images without scraping hidden content.'
+}
+
+function isHealthIntent(lower: string): boolean {
+  return /health|medicine|medication|doctor|clinic|symptom|aids|hiv|prescription|pharmacy|drug|illness|infection|pain|urgent care/.test(lower)
+}
+
 export function totalBlockCount(): number {
   return 11
 }
@@ -267,7 +404,9 @@ function buildDepositDisputeManifest({
   inputs,
   executionSteps,
   agentDraft,
+  intent,
   providerLabel,
+  webResources = [],
 }: ManifestArgs): UiManifest {
   const state = String(inputs.state ?? 'MA')
   const depositAmount = Number(inputs.deposit_amount ?? 1800)
@@ -286,10 +425,12 @@ function buildDepositDisputeManifest({
   const completedSteps = executionSteps.filter((step) => step.status === 'done').length
   const isComplete = executionSteps.length > 0 && completedSteps === executionSteps.length
   const runningStep = executionSteps.find((step) => step.status === 'running')
+  const tenantResourceMission = isDepositOrTenantIntent(intent)
+  const capabilityGrid = capabilityGridFromDraft(agentDraft, useCase)
   const packetReadiness = Math.min(98, 42 + evidence.split(',').filter(Boolean).length * 9 + (daysWaited >= rule.days ? 18 : 8))
   const consoleLines = buildConsoleLines({
     useCase,
-    capabilities: useCase.capabilities,
+    capabilities: capabilityGrid,
     steps: executionSteps,
     extraLines: [
       `> AG-UI state :: ${state} / ${daysWaited} days / $${depositAmount}`,
@@ -324,7 +465,16 @@ function buildDepositDisputeManifest({
       id: 'capabilities',
       kind: 'capabilityGrid',
       title: 'Discovered MCP app stack',
-      capabilities: useCase.capabilities,
+      capabilities: capabilityGrid,
+    },
+    {
+      id: 'resources',
+      kind: 'resourceLauncher',
+      title: tenantResourceMission ? 'Tenant resource launcher' : resourceTitleFor(intent),
+      description: tenantResourceMission
+        ? 'Open real renter-rights and legal-aid resources in new tabs before acting.'
+        : `${resourceDescriptionFor(intent)} Each card is a link that opens a normal browser tab.`,
+      resources: webResources.length ? webResources : defaultResourcesFor(useCase, intent),
     },
     {
       id: 'controls',
@@ -347,6 +497,14 @@ function buildDepositDisputeManifest({
       kind: 'evidenceMatrix',
       title: 'Evidence matrix',
       items: buildEvidenceItems(evidence),
+    },
+    {
+      id: 'images',
+      kind: 'imageIntake',
+      title: 'Evidence photo intake',
+      description: 'Preview move-in photos, move-out photos, receipts, or damage images before exporting the packet.',
+      accepted: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+      caution: 'Images are previewed locally for organization only. Verify evidence and local law before sending or filing.',
     },
     {
       id: 'letter',
@@ -410,7 +568,7 @@ function buildDepositDisputeManifest({
     id: useCase.id,
     title: agentDraft?.title ?? useCase.title,
     subtitle: agentDraft?.subtitle ?? `${providerLabel} generated a domain-specific dispute workspace and export packet.`,
-    generatedFor: useCase.intent,
+    generatedFor: intent,
     blocks,
     meta,
     argument: argumentLines,
@@ -509,14 +667,16 @@ function buildConsoleLines({ useCase, capabilities, steps, extraLines, providerL
 }
 
 function metaFor(blocks: UiBlock[]): Record<string, BlockMeta> {
-  const authors: AgentVoice[] = ['sage', 'forge', 'forge', 'forge', 'lens', 'echo', 'wild', 'echo', 'sage', 'lens', 'wild']
+  const authors: AgentVoice[] = ['sage', 'forge', 'forge', 'sage', 'forge', 'forge', 'lens', 'echo', 'forge', 'wild', 'echo', 'sage', 'lens', 'wild']
   const reasons = [
     'Sage frames the real-world problem.',
     'Forge exposes the protocol layer instead of hiding it.',
     'Forge discovers the tool stack this workflow needs.',
+    'Sage opens real resources instead of pretending all knowledge is local.',
     'Forge renders editable facts as shared state.',
     'Lens checks jurisdiction and risk.',
     'Echo turns messy evidence into a matrix.',
+    'Forge previews evidence images before they become artifacts.',
     'Wild drafts the artifact users actually need.',
     'Echo computes live readiness from state.',
     'Sage sequences tool calls.',

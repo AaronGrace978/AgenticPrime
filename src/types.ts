@@ -106,6 +106,16 @@ export type ArgumentLine = {
   }
 }
 
+export type WebResource = {
+  id: string
+  label: string
+  url: string
+  source: string
+  detail: string
+  urgency?: 'routine' | 'soon' | 'urgent'
+  imageUrl?: string
+}
+
 export type UiBlock =
   | {
       id: string
@@ -120,6 +130,21 @@ export type UiBlock =
       kind: 'capabilityGrid'
       title: string
       capabilities: Capability[]
+    }
+  | {
+      id: string
+      kind: 'resourceLauncher'
+      title: string
+      description: string
+      resources: WebResource[]
+    }
+  | {
+      id: string
+      kind: 'imageIntake'
+      title: string
+      description: string
+      accepted: string[]
+      caution: string
     }
   | {
       id: string
@@ -260,6 +285,8 @@ export type AgentDraft = {
     capability: string
     outcome: string
   }>
+  /** When the live model returns 4+ items, the runtime shows these instead of the preset use-case tool cards. */
+  discoveredCapabilities?: Capability[]
 }
 
 export type UseCaseInputs = Record<string, string | number>

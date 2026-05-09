@@ -1,4 +1,4 @@
-import type { ChangeEvent } from 'react'
+import { useState, type ChangeEvent } from 'react'
 import { agentById } from '../agents'
 import type {
   Capability,
@@ -6,6 +6,7 @@ import type {
   ExecutionStatus,
   UiBlock,
   UiManifest,
+  WebResource,
 } from '../types'
 
 type RuntimeRendererProps = {
@@ -20,6 +21,8 @@ type RuntimeRendererProps = {
 const blockSpan: Record<UiBlock['kind'], string> = {
   hero: 'wide',
   capabilityGrid: 'wide',
+  resourceLauncher: 'wide',
+  imageIntake: 'half',
   form: 'half',
   metricStrip: 'half',
   barChart: 'third',
@@ -126,6 +129,36 @@ function ManifestBlock({ block, canExecute, onApprove, onFieldChange }: Manifest
             ))}
           </div>
         </div>
+      )
+    case 'resourceLauncher':
+      return (
+        <div>
+          <div className="block-heading">
+            <div>
+              <p className="eyebrow">Real web resources</p>
+              <h3>{block.title}</h3>
+              <p>{block.description}</p>
+            </div>
+            <span>{block.resources.length} links</span>
+          </div>
+          <div className="resource-grid">
+            {block.resources.map((resource) => (
+              <ResourceCard key={resource.id} resource={resource} />
+            ))}
+          </div>
+          <p className="resource-tab-hint">
+            Nothing embeds inside this app: click a card and your browser opens the site in a new tab.
+          </p>
+        </div>
+      )
+    case 'imageIntake':
+      return (
+        <ImageIntake
+          accepted={block.accepted}
+          caution={block.caution}
+          description={block.description}
+          title={block.title}
+        />
       )
     case 'form':
       return (
@@ -318,6 +351,103 @@ function ManifestBlock({ block, canExecute, onApprove, onFieldChange }: Manifest
         </div>
       )
   }
+}
+
+function ResourceCard({ resource }: { resource: WebResource }) {
+  return (
+    <a
+      className={`resource-card resource-${resource.urgency ?? 'routine'}`}
+      href={resource.url}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      {resource.imageUrl ? <img alt="" src={resource.imageUrl} /> : <span className="resource-image-placeholder">WEB</span>}
+      <div>
+        <span>{resource.source}</span>
+        <strong>{resource.label}</strong>
+        <p>{resource.detail}</p>
+      </div>
+    </a>
+  )
+}
+
+function ImageIntake({
+  accepted,
+  caution,
+  description,
+  title,
+}: {
+  accepted: string[]
+  caution: string
+  description: string
+  title: string
+}) {
+  const [imageUrl, setImageUrl] = useState('')
+  const [previews, setPreviews] = useState<string[]>([])
+
+  function addUrlPreview() {
+    const next = imageUrl.trim()
+    if (!next) return
+    setPreviews((current) => [next, ...current.filter((item) => item !== next)].slice(0, 6))
+    setImageUrl('')
+  }
+
+  function handleFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith('image/'))
+    for (const file of files.slice(0, 4)) {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = reader.result
+        if (typeof result === 'string') {
+          setPreviews((current) => [result, ...current].slice(0, 6))
+        }
+      }
+      reader.readAsDataURL(file)
+    }
+    event.target.value = ''
+  }
+
+  return (
+    <div className="image-intake">
+      <div className="block-heading">
+        <div>
+          <p className="eyebrow">Image intake</p>
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </div>
+      </div>
+      <div className="image-intake-controls">
+        <label className="field-shell">
+          <span>Paste image URL</span>
+          <input
+            placeholder="https://example.com/image.jpg"
+            type="url"
+            value={imageUrl}
+            onChange={(event) => setImageUrl(event.target.value)}
+          />
+        </label>
+        <button className="secondary-action" type="button" onClick={addUrlPreview}>
+          Preview URL
+        </button>
+        <label className="field-shell">
+          <span>Upload local image</span>
+          <input accept={accepted.join(',')} type="file" multiple onChange={handleFiles} />
+        </label>
+      </div>
+      <p className="image-caution">{caution}</p>
+      {previews.length > 0 ? (
+        <div className="image-preview-grid">
+          {previews.map((preview, index) => (
+            <a href={preview} key={`${preview}-${index}`} target="_blank" rel="noreferrer">
+              <img alt={`Preview ${index + 1}`} src={preview} />
+            </a>
+          ))}
+        </div>
+      ) : (
+        <div className="image-empty">Paste a URL or upload screenshots/photos to preview them here. No diagnosis is performed.</div>
+      )}
+    </div>
+  )
 }
 
 function CapabilityCard({ capability }: { capability: Capability }) {

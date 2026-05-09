@@ -153,6 +153,13 @@ textarea {
   padding: 13px 14px;
 }
 
+.intent-scaffolding-note {
+  margin: -4px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 .intent-actions {
   justify-content: space-between;
   gap: 12px;
