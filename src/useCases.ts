@@ -217,10 +217,10 @@ export const useCases: UseCaseDefinition[] = [
   {
     id: 'crisis-operator',
     title: '3 AM Crisis Operator',
-    eyebrow: 'Panic-calibrated UI',
-    summary: 'Power outage, lost passport, ER visit. The room calms, the steps appear.',
+    eyebrow: 'Hero demo · panic-calibrated UI',
+    summary: 'Stolen passport. Foreign city. 12% battery. The swarm builds the panel that gets you out of the worst minute.',
     intent:
-      'It is 3 AM. I am stuck in a foreign city with a stolen passport and a dead phone almost out of battery. Build me the exact panel I need right now.',
+      "It is 3 AM. I'm stuck in a foreign city. My passport was stolen and my phone is at 12%. Build me the exact panel I need right now — not a dashboard, not a map, the next four taps.",
     inputs: [
       {
         id: 'situation',
@@ -313,9 +313,9 @@ export const useCases: UseCaseDefinition[] = [
     ],
     hero: {
       eyebrow: 'Panic-aware surface',
-      title: 'A panel built for the worst minute, not for browsing.',
-      body: 'The swarm calibrated density, contrast, and language to the situation. Every control is one tap.',
-      chips: ['One-tap actions', 'Offline cached', 'Local language', 'Battery-aware'],
+      title: 'A panel for the worst minute of the night, not for browsing.',
+      body: 'Five agents argued the surface into a single column of one-tap moves. Density follows panic. The dial waits for your finger.',
+      chips: ['One-tap actions', 'Offline cached', 'Local language', 'Battery-aware', 'Consent-gated dial'],
     },
     closingTitle: 'Why this is unlike any app',
   },

@@ -14,6 +14,7 @@ type RuntimeRendererProps = {
   canExecute: boolean
   onFieldChange: (fieldId: string, value: string | number) => void
   onApprove: () => void
+  disputedBlockId?: string
 }
 
 const blockSpan: Record<UiBlock['kind'], string> = {
@@ -39,6 +40,7 @@ export function RuntimeRenderer({
   canExecute,
   onFieldChange,
   onApprove,
+  disputedBlockId,
 }: RuntimeRendererProps) {
   const visibleBlocks = manifest.blocks.slice(0, Math.max(0, visibleBlockCount))
 
@@ -61,10 +63,11 @@ export function RuntimeRenderer({
           const meta = manifest.meta[block.id]
           const author = meta?.author ?? 'echo'
           const agent = agentById(author)
+          const isDisputed = disputedBlockId === block.id
           return (
             <article
               key={block.id}
-              className={`block block-${blockSpan[block.kind]} block-${block.kind} author-${author}`}
+              className={`block block-${blockSpan[block.kind]} block-${block.kind} author-${author} ${isDisputed ? 'block-disputed' : ''}`}
               style={
                 {
                   '--author-color': agent.color,
@@ -72,6 +75,7 @@ export function RuntimeRenderer({
                   animationDelay: `${index * 90}ms`,
                 } as React.CSSProperties
               }
+              data-author={author}
             >
               <div className="block-attribution">
                 <span className="author-dot" />

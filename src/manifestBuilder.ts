@@ -1,3 +1,9 @@
+import {
+  buildArgumentScript,
+  closingLinesFor,
+  reasoningFor,
+  receiptTaglineFor,
+} from './agentVoices'
 import type {
   AgentDraft,
   AgentVoice,
@@ -132,53 +138,35 @@ export function buildManifest({
     },
   ]
 
-  const meta: Record<string, BlockMeta> = {
-    hero: {
-      author: 'sage',
-      reasoning: `Sage framed the problem: ${useCase.summary}`,
-      proposedAt: 0,
-    },
-    capabilities: {
-      author: 'forge',
-      reasoning: `Forge surfaced ${useCase.capabilities.length} capabilities that fit this exact moment.`,
-      proposedAt: 1,
-    },
-    controls: {
-      author: 'forge',
-      reasoning: 'Forge generated the live knobs that rewrite the rest of the surface.',
-      proposedAt: 2,
-    },
-    metrics: {
-      author: 'echo',
-      reasoning: 'Echo synthesized the three numbers a human can actually act on.',
-      proposedAt: 3,
-    },
-    chart: {
-      author: 'echo',
-      reasoning: 'Echo proposed this comparison so the trade-offs are visible at a glance.',
-      proposedAt: 4,
-    },
-    timeline: {
-      author: 'sage',
-      reasoning: 'Sage sequenced the moves so the next action is always obvious.',
-      proposedAt: 5,
-    },
-    approval: {
-      author: 'lens',
-      reasoning: 'Lens insisted on a human gate before any side-effect leaves the room.',
-      proposedAt: 6,
-    },
-    console: {
-      author: 'wild',
-      reasoning: 'Wild wired a live receipt console so nothing happens off-screen.',
-      proposedAt: 7,
-    },
-    checklist: {
-      author: 'wild',
-      reasoning: 'Wild closed with the test the demo has to pass to feel right.',
-      proposedAt: 8,
-    },
+  const authors: Record<string, AgentVoice> = {
+    hero: 'sage',
+    capabilities: 'forge',
+    controls: 'forge',
+    metrics: 'echo',
+    chart: 'echo',
+    timeline: 'sage',
+    approval: 'lens',
+    console: 'wild',
+    checklist: 'wild',
   }
+
+  const meta: Record<string, BlockMeta> = {}
+  blocks.forEach((block, index) => {
+    const author = authors[block.id] ?? 'echo'
+    meta[block.id] = {
+      author,
+      reasoning: reasoningFor(author, block, useCase),
+      proposedAt: index,
+    }
+  })
+
+  const disputeBlockId = 'approval'
+  const argumentScript = buildArgumentScript({
+    useCase,
+    blocks,
+    authorByBlockId: authors,
+    disputeBlockId,
+  })
 
   return {
     id: useCase.id,
@@ -189,6 +177,11 @@ export function buildManifest({
     generatedFor: intent,
     blocks,
     meta,
+    argument: argumentScript.lines,
+    disputeAtProposedAt: argumentScript.disputeAtProposedAt,
+    disputeBlockId,
+    closingLines: closingLinesFor(useCase),
+    receiptTagline: receiptTaglineFor(useCase),
   }
 }
 
@@ -244,6 +237,18 @@ function buildUnsupportedIntentManifest({
     generatedFor: intent,
     blocks,
     meta: metaFor(blocks),
+    argument: [
+      { id: 'u-0', agent: 'lens', text: 'No. We do not fake a tool we cannot run.', proposedAt: 0, beat: 'open' },
+      { id: 'u-1', agent: 'sage', text: 'Route to a real operator. Be honest about it.', proposedAt: 0, beat: 'counter', delayMs: 320 },
+      { id: 'u-2', agent: 'wild', text: 'Refusing is the move. Say it loud.', proposedAt: 0, beat: 'settle', delayMs: 640 },
+    ],
+    disputeAtProposedAt: undefined,
+    disputeBlockId: undefined,
+    closingLines: [
+      { agent: 'lens', text: 'Refused. No fake tool calls today.' },
+      { agent: 'sage', text: 'Routed to a real operator instead.' },
+    ],
+    receiptTagline: 'Five agents agreed: do not pretend.',
   }
 }
 
@@ -382,13 +387,30 @@ function buildDepositDisputeManifest({
     },
   ]
 
+  const meta = metaFor(blocks)
+  const authorByBlockId = Object.fromEntries(
+    Object.entries(meta).map(([blockId, blockMeta]) => [blockId, blockMeta.author]),
+  ) as Record<string, AgentVoice>
+  const disputeBlockId = 'approval'
+  const argumentScript = buildArgumentScript({
+    useCase,
+    blocks,
+    authorByBlockId,
+    disputeBlockId,
+  })
+
   return {
     id: useCase.id,
     title: agentDraft?.title ?? useCase.title,
     subtitle: agentDraft?.subtitle ?? `${providerLabel} generated a domain-specific dispute workspace and export packet.`,
     generatedFor: useCase.intent,
     blocks,
-    meta: metaFor(blocks),
+    meta,
+    argument: argumentScript.lines,
+    disputeAtProposedAt: argumentScript.disputeAtProposedAt,
+    disputeBlockId,
+    closingLines: closingLinesFor(useCase),
+    receiptTagline: receiptTaglineFor(useCase),
   }
 }
 

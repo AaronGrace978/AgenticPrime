@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { agentRoster } from './agents'
 import { AgentRoster } from './components/AgentRoster'
+import { ArgumentStream } from './components/ArgumentStream'
 import { ProviderPanel } from './components/ProviderPanel'
-import { ReceiptDissolve } from './components/ReceiptDissolve'
+import { DissolveCurtain, ReceiptDissolve } from './components/ReceiptDissolve'
 import { RuntimeRenderer } from './components/RuntimeRenderer'
 import { TimeScrubber } from './components/TimeScrubber'
 import { UseCasePicker } from './components/UseCasePicker'
@@ -16,9 +17,11 @@ import { findProvider, providerOptions, providerTip, type ProviderId } from './p
 import { findUseCase, useCases } from './useCases'
 import type { AgentDraft, AgentVoice, ArtifactReceipt, ExecutionStep } from './types'
 
-type Stage = 'idle' | 'generating' | 'ready' | 'executing' | 'done' | 'dissolved'
+type Stage = 'idle' | 'generating' | 'ready' | 'executing' | 'done' | 'dissolving' | 'dissolved'
 
-const STREAM_INTERVAL_MS = 320
+const STREAM_INTERVAL_MS = 360
+const DISPUTE_PULSE_MS = 1600
+const DISSOLVE_DURATION_MS = 2800
 const LIVE_PROVIDER_TIMEOUT_MS = 120_000
 
 function App() {
@@ -34,6 +37,7 @@ function App() {
   const [activeAuthor, setActiveAuthor] = useState<AgentVoice | undefined>()
   const [generationError, setGenerationError] = useState('')
   const [artifactReceipt, setArtifactReceipt] = useState<ArtifactReceipt | undefined>()
+  const [disputedBlockId, setDisputedBlockId] = useState<string | undefined>(undefined)
 
   const [provider, setProvider] = useState<ProviderId>('offline')
   const [apiKey, setApiKey] = useState('')
@@ -98,6 +102,7 @@ function App() {
     }
 
     setVisibleBlocks(0)
+    setDisputedBlockId(undefined)
     streamTimerRef.current = window.setInterval(() => {
       setVisibleBlocks((current) => {
         if (current >= targetCount) {
@@ -111,9 +116,17 @@ function App() {
         }
 
         const nextCount = current + 1
-        const nextMeta = manifest.meta[manifest.blocks[nextCount - 1]?.id]
+        const nextBlock = manifest.blocks[nextCount - 1]
+        const nextMeta = manifest.meta[nextBlock?.id ?? '']
         if (nextMeta) {
           setActiveAuthor(nextMeta.author)
+        }
+        if (
+          manifest.disputeBlockId &&
+          nextBlock?.id === manifest.disputeBlockId
+        ) {
+          setDisputedBlockId(manifest.disputeBlockId)
+          window.setTimeout(() => setDisputedBlockId(undefined), DISPUTE_PULSE_MS)
         }
         return nextCount
       })
@@ -335,7 +348,8 @@ function App() {
           if (index === planSteps.length - 1) {
             setStage('done')
             void exportApprovedPacket(completedSteps).finally(() => {
-              window.setTimeout(() => setStage('dissolved'), 900)
+              window.setTimeout(() => setStage('dissolving'), 600)
+              window.setTimeout(() => setStage('dissolved'), 600 + DISSOLVE_DURATION_MS)
             })
           }
         },
@@ -388,6 +402,7 @@ function App() {
     setActiveAuthor(undefined)
     setGenerationError('')
     setProviderStatus('')
+    setDisputedBlockId(undefined)
   }
 
   function reforge() {
@@ -396,6 +411,7 @@ function App() {
     setVisibleBlocks(0)
     setActiveAuthor(undefined)
     setArtifactReceipt(undefined)
+    setDisputedBlockId(undefined)
   }
 
   return (
@@ -497,22 +513,40 @@ function App() {
       <UseCasePicker useCases={useCases} selectedId={useCaseId} onSelect={pickUseCase} />
 
       <div className="swarm-grid">
-        <AgentRoster
-          activeAuthor={activeAuthor}
-          meta={manifest.meta}
-          visibleBlockCount={visibleBlocks}
-        />
-        <div className="swarm-main">
+        <div className="swarm-rail">
+          <AgentRoster
+            activeAuthor={activeAuthor}
+            meta={manifest.meta}
+            visibleBlockCount={visibleBlocks}
+            argumentLines={manifest.argument}
+          />
+          <ArgumentStream
+            lines={manifest.argument}
+            visibleProposedAt={visibleBlocks}
+            isDisputing={Boolean(disputedBlockId)}
+            disputeBlockId={manifest.disputeBlockId}
+          />
+        </div>
+        <div className={`swarm-main ${stage === 'dissolving' ? 'swarm-main-dissolving' : ''}`}>
           {stage === 'dissolved' ? (
-            <ReceiptDissolve artifactReceipt={artifactReceipt} useCase={useCase} onDismiss={reforge} />
-          ) : (
-            <RuntimeRenderer
-              canExecute={stage === 'ready' || stage === 'idle'}
+            <ReceiptDissolve
+              artifactReceipt={artifactReceipt}
               manifest={manifest}
-              onApprove={executePlan}
-              onFieldChange={updateInput}
-              visibleBlockCount={visibleBlocks}
+              useCase={useCase}
+              onDismiss={reforge}
             />
+          ) : (
+            <>
+              <RuntimeRenderer
+                canExecute={stage === 'ready' || stage === 'idle'}
+                disputedBlockId={disputedBlockId}
+                manifest={manifest}
+                onApprove={executePlan}
+                onFieldChange={updateInput}
+                visibleBlockCount={visibleBlocks}
+              />
+              {stage === 'dissolving' ? <DissolveCurtain manifest={manifest} /> : null}
+            </>
           )}
         </div>
       </div>

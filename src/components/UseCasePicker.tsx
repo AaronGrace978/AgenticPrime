@@ -6,6 +6,8 @@ type UseCasePickerProps = {
   onSelect: (id: string) => void
 }
 
+const HERO_USE_CASE_ID = 'crisis-operator'
+
 export function UseCasePicker({ useCases, selectedId, onSelect }: UseCasePickerProps) {
   return (
     <section className="picker-shell" aria-label="Use case shelf">
@@ -17,13 +19,15 @@ export function UseCasePicker({ useCases, selectedId, onSelect }: UseCasePickerP
       <div className="picker-rail">
         {useCases.map((useCase) => {
           const isSelected = useCase.id === selectedId
+          const isHero = useCase.id === HERO_USE_CASE_ID
           return (
             <button
               key={useCase.id}
               type="button"
-              className={`picker-card ${isSelected ? 'picker-active' : ''}`}
+              className={`picker-card ${isSelected ? 'picker-active' : ''} ${isHero ? 'picker-hero' : ''}`}
               onClick={() => onSelect(useCase.id)}
             >
+              {isHero ? <span className="picker-hero-badge">Hero demo</span> : null}
               <span className="picker-eyebrow">{useCase.eyebrow}</span>
               <strong>{useCase.title}</strong>
               <span className="picker-summary">{useCase.summary}</span>

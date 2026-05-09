@@ -81,12 +81,25 @@ export type AgentDefinition = {
   tagline: string
   color: string
   glow: string
+  cadence: string
+  archetype: string
 }
 
 export type BlockMeta = {
   author: AgentVoice
   reasoning: string
   proposedAt: number
+}
+
+export type ArgumentBeat = 'open' | 'counter' | 'settle' | 'mic-drop'
+
+export type ArgumentLine = {
+  id: string
+  agent: AgentVoice
+  text: string
+  proposedAt: number
+  beat: ArgumentBeat
+  delayMs?: number
 }
 
 export type UiBlock =
@@ -194,6 +207,11 @@ export type UiManifest = {
   generatedFor: string
   blocks: UiBlock[]
   meta: Record<string, BlockMeta>
+  argument: ArgumentLine[]
+  disputeAtProposedAt?: number
+  disputeBlockId?: string
+  closingLines: { agent: AgentVoice; text: string }[]
+  receiptTagline: string
 }
 
 export type ArtifactReceipt = {
