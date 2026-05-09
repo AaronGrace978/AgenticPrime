@@ -56,14 +56,19 @@ export function buildManifest({
     data: agentDraft?.chart?.data?.length ? (agentDraft.chart.data as ChartDatum[]) : useCase.chart.data,
   }
 
-  const completedSteps = executionSteps.filter((step) => step.status === 'done').length
-  const isComplete = executionSteps.length > 0 && completedSteps === executionSteps.length
-  const runningStep = executionSteps.find((step) => step.status === 'running')
+  const draftExecutionSteps = executionStepsFromDraft(agentDraft, useCase)
+  const hasExecutionProgress = executionSteps.some((step) => step.status !== 'pending')
+  const visibleExecutionSteps = !hasExecutionProgress && draftExecutionSteps.length > 0
+    ? draftExecutionSteps
+    : executionSteps
+  const completedSteps = visibleExecutionSteps.filter((step) => step.status === 'done').length
+  const isComplete = visibleExecutionSteps.length > 0 && completedSteps === visibleExecutionSteps.length
+  const runningStep = visibleExecutionSteps.find((step) => step.status === 'running')
 
   const consoleLines = buildConsoleLines({
     useCase,
     capabilities: useCase.capabilities,
-    steps: executionSteps,
+    steps: visibleExecutionSteps,
     extraLines: agentDraft?.consoleLines,
     providerLabel,
   })
@@ -110,7 +115,7 @@ export function buildManifest({
         : isComplete
           ? 'Simulated execution receipt'
           : 'Proposed simulated plan',
-      steps: executionSteps,
+      steps: visibleExecutionSteps,
     },
     {
       id: 'approval',
@@ -161,12 +166,13 @@ export function buildManifest({
   })
 
   const disputeBlockId = 'approval'
-  const argumentScript = buildArgumentScript({
+  const generatedArgumentScript = buildArgumentScript({
     useCase,
     blocks,
     authorByBlockId: authors,
     disputeBlockId,
   })
+  const argumentLines = argumentLinesFromDraft(agentDraft, blocks) ?? generatedArgumentScript.lines
 
   return {
     id: useCase.id,
@@ -177,8 +183,8 @@ export function buildManifest({
     generatedFor: intent,
     blocks,
     meta,
-    argument: argumentScript.lines,
-    disputeAtProposedAt: argumentScript.disputeAtProposedAt,
+    argument: argumentLines,
+    disputeAtProposedAt: generatedArgumentScript.disputeAtProposedAt,
     disputeBlockId,
     closingLines: closingLinesFor(useCase),
     receiptTagline: receiptTaglineFor(useCase),
@@ -392,12 +398,13 @@ function buildDepositDisputeManifest({
     Object.entries(meta).map(([blockId, blockMeta]) => [blockId, blockMeta.author]),
   ) as Record<string, AgentVoice>
   const disputeBlockId = 'approval'
-  const argumentScript = buildArgumentScript({
+  const generatedArgumentScript = buildArgumentScript({
     useCase,
     blocks,
     authorByBlockId,
     disputeBlockId,
   })
+  const argumentLines = argumentLinesFromDraft(agentDraft, blocks) ?? generatedArgumentScript.lines
 
   return {
     id: useCase.id,
@@ -406,8 +413,8 @@ function buildDepositDisputeManifest({
     generatedFor: useCase.intent,
     blocks,
     meta,
-    argument: argumentScript.lines,
-    disputeAtProposedAt: argumentScript.disputeAtProposedAt,
+    argument: argumentLines,
+    disputeAtProposedAt: generatedArgumentScript.disputeAtProposedAt,
     disputeBlockId,
     closingLines: closingLinesFor(useCase),
     receiptTagline: receiptTaglineFor(useCase),
@@ -421,6 +428,47 @@ export function emptyExecutionSteps(useCase: UseCaseDefinition): ExecutionStep[]
     detail: step.detail,
     capabilityId: step.capabilityId,
     status: 'pending',
+  }))
+}
+
+function executionStepsFromDraft(agentDraft: AgentDraft | undefined, useCase: UseCaseDefinition): ExecutionStep[] {
+  if (!agentDraft?.executionSteps?.length) {
+    return []
+  }
+
+  return agentDraft.executionSteps.slice(0, 6).map((step, index) => {
+    const hintedCapability = useCase.capabilities.find(
+      (capability) => capability.id === step.capabilityHint || capability.name === step.capabilityHint,
+    )
+    const fallbackCapability = useCase.steps[index]?.capabilityId ?? useCase.capabilities[index % useCase.capabilities.length]?.id
+
+    return {
+      id: `${useCase.id}-draft-step-${index}`,
+      title: step.title,
+      detail: step.detail,
+      capabilityId: hintedCapability?.id ?? fallbackCapability ?? 'offline-operation',
+      status: 'pending',
+    }
+  })
+}
+
+function argumentLinesFromDraft(agentDraft: AgentDraft | undefined, blocks: UiBlock[]): UiManifest['argument'] | undefined {
+  if (!agentDraft?.agentTurns?.length) {
+    return undefined
+  }
+
+  const lastFrame = Math.max(0, blocks.length - 1)
+  return agentDraft.agentTurns.slice(0, 8).map((turn, index) => ({
+    id: `agent-turn-${index}-${turn.agent}`,
+    agent: turn.agent,
+    text: turn.text,
+    proposedAt: Math.min(index, lastFrame),
+    beat: index === agentDraft.agentTurns!.length - 1 ? 'mic-drop' : index === 2 ? 'counter' : 'open',
+    delayMs: index * 160,
+    operation: {
+      capability: turn.capability,
+      outcome: turn.outcome,
+    },
   }))
 }
 

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import './Redesign.css'
 import { agentRoster } from './agents'
 import { AgentRoster } from './components/AgentRoster'
 import { ArgumentStream } from './components/ArgumentStream'
 import { ProviderPanel } from './components/ProviderPanel'
 import { DissolveCurtain, ReceiptDissolve } from './components/ReceiptDissolve'
 import { RuntimeRenderer } from './components/RuntimeRenderer'
+import { SwarmHistory } from './components/SwarmHistory'
 import { TimeScrubber } from './components/TimeScrubber'
 import { UseCasePicker } from './components/UseCasePicker'
 import {
@@ -13,13 +15,15 @@ import {
   defaultInputsFor,
   emptyExecutionSteps,
 } from './manifestBuilder'
+import { buildOfflineDraft } from './offlineDrafts'
 import { findProvider, providerOptions, providerTip, type ProviderId } from './providers'
 import { findUseCase, useCases } from './useCases'
-import type { AgentDraft, AgentVoice, ArtifactReceipt, ExecutionStep } from './types'
+import type { AgentDraft, AgentVoice, ArtifactReceipt, ExecutionStep, UiBlock, UseCaseDefinition } from './types'
 
 type Stage = 'idle' | 'generating' | 'ready' | 'executing' | 'done' | 'dissolving' | 'dissolved'
 
 const STREAM_INTERVAL_MS = 360
+const OFFLINE_STREAM_INTERVAL_MS = 300
 const DISPUTE_PULSE_MS = 1600
 const DISSOLVE_DURATION_MS = 2800
 const LIVE_PROVIDER_TIMEOUT_MS = 120_000
@@ -43,6 +47,7 @@ function App() {
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState(providerOptions[0].defaultModel)
   const [baseUrl, setBaseUrl] = useState(providerOptions[0].defaultBaseUrl)
+  const [offlineChaos, setOfflineChaos] = useState(0)
   const [isCustomModel, setIsCustomModel] = useState(false)
   const [providerStatus, setProviderStatus] = useState('')
   const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0)
@@ -96,7 +101,7 @@ function App() {
     return () => window.clearInterval(timer)
   }, [provider, stage])
 
-  function startStreaming(targetCount: number) {
+  function startStreaming(targetCount: number, intervalMs = STREAM_INTERVAL_MS) {
     if (streamTimerRef.current !== undefined) {
       window.clearInterval(streamTimerRef.current)
     }
@@ -130,7 +135,7 @@ function App() {
         }
         return nextCount
       })
-    }, STREAM_INTERVAL_MS)
+    }, intervalMs)
   }
 
   async function generateSurface() {
@@ -168,8 +173,12 @@ function App() {
     setArtifactReceipt(undefined)
 
     if (provider === 'offline') {
-      setAgentDraft(undefined)
-      window.setTimeout(() => startStreaming(totalBlocks), 220)
+      setProviderStatus('Offline agents are operating locally. No network call will be made.')
+      setAgentDraft(buildOfflineDraft({ useCase, inputs, intent, chaos: offlineChaos }))
+      window.setTimeout(() => {
+        setProviderStatus('')
+        startStreaming(totalBlocks, offlineStreamInterval(offlineChaos))
+      }, 180)
       return
     }
 
@@ -225,15 +234,14 @@ function App() {
       const display = tip ? `${message}\n\nTip: ${tip}` : message
       setGenerationError(display)
       setProviderStatus('')
-      setAgentDraft({
-        subtitle: `Live provider failed, so AgenticPrime kept the offline swarm ready. ${message}`,
-        consoleLines: [
-          `> live provider failed: ${message}`,
-          ...(tip ? [`> hint: ${tip}`] : []),
-          '> offline swarm fallback engaged',
-        ],
-      })
-      startStreaming(totalBlocks)
+      setAgentDraft(buildOfflineDraft({
+        useCase,
+        inputs,
+        intent,
+        chaos: offlineChaos,
+        reason: `Live provider failed, so the offline swarm took over. ${message}`,
+      }))
+      startStreaming(totalBlocks, offlineStreamInterval(offlineChaos))
     } finally {
       window.clearTimeout(timeoutId)
       if (generationRequestRef.current === requestId) {
@@ -249,16 +257,9 @@ function App() {
     setProviderStatus('')
     setGenerationError(reason)
     setArtifactReceipt(undefined)
-    setAgentDraft({
-      subtitle: reason,
-      consoleLines: [
-        '> live provider bypassed by user',
-        '> offline swarm fallback engaged',
-        '> deterministic manifest ready for demo',
-      ],
-    })
+    setAgentDraft(buildOfflineDraft({ useCase, inputs, intent, chaos: offlineChaos, reason }))
     setStage('generating')
-    startStreaming(totalBlocks)
+    startStreaming(totalBlocks, offlineStreamInterval(offlineChaos))
   }
 
   function cancelLiveGeneration() {
@@ -321,7 +322,7 @@ function App() {
       return
     }
 
-    const planSteps = emptyExecutionSteps(useCase)
+    const planSteps = plannedStepsFromManifest(manifest.blocks, useCase)
     const completedSteps = planSteps.map<ExecutionStep>((step) => ({ ...step, status: 'done' }))
 
     setArtifactReceipt(undefined)
@@ -415,7 +416,7 @@ function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell stage-${stage}`}>
       <section className="intro-panel">
         <div className="brand-row">
           <span className="orb" />
@@ -434,6 +435,13 @@ function App() {
             human approval gate. Use offline mode for a deterministic run, or bring your own model provider.
           </p>
         </div>
+
+        <GenerationConstellation
+          activeAuthor={activeAuthor}
+          isGenerating={stage === 'generating'}
+          visibleBlocks={visibleBlocks}
+          totalBlocks={totalBlocks}
+        />
 
         <div className="intent-card">
           <label htmlFor="intent">The intent the swarm is shaping</label>
@@ -470,6 +478,7 @@ function App() {
             isProviderReady={isProviderReady}
             isGenerating={stage === 'generating'}
             generationElapsedSeconds={generationElapsedSeconds}
+            offlineChaos={offlineChaos}
             model={model}
             onApiKey={setApiKey}
             onBaseUrl={setBaseUrl}
@@ -483,6 +492,7 @@ function App() {
               }
             }}
             onOfflineFallback={() => activateOfflineFallback()}
+            onOfflineChaos={setOfflineChaos}
             onModel={setModel}
             onProvider={(nextId) => {
               const next = findProvider(nextId)
@@ -526,8 +536,16 @@ function App() {
             isDisputing={Boolean(disputedBlockId)}
             disputeBlockId={manifest.disputeBlockId}
           />
+          <SwarmHistory lines={manifest.argument} visibleProposedAt={visibleBlocks} />
         </div>
         <div className={`swarm-main ${stage === 'dissolving' ? 'swarm-main-dissolving' : ''}`}>
+          {stage === 'generating' ? (
+            <GenerationRibbon
+              activeAuthor={activeAuthor}
+              visibleBlocks={visibleBlocks}
+              totalBlocks={totalBlocks}
+            />
+          ) : null}
           {stage === 'dissolved' ? (
             <ReceiptDissolve
               artifactReceipt={artifactReceipt}
@@ -589,6 +607,98 @@ function unsupportedReasonFor(useCaseId: string, intent: string): string | null 
   }
 
   return null
+}
+
+function plannedStepsFromManifest(blocks: UiBlock[], useCase: UseCaseDefinition): ExecutionStep[] {
+  for (const block of blocks) {
+    if (block.kind === 'timeline') {
+      return block.steps.map((step) => ({ ...step, status: 'pending' }))
+    }
+  }
+
+  return emptyExecutionSteps(useCase)
+}
+
+function offlineStreamInterval(chaos: number): number {
+  return Math.max(190, OFFLINE_STREAM_INTERVAL_MS - Math.round(chaos * 0.85))
+}
+
+function GenerationConstellation({
+  activeAuthor,
+  isGenerating,
+  visibleBlocks,
+  totalBlocks,
+}: {
+  activeAuthor?: AgentVoice
+  isGenerating: boolean
+  visibleBlocks: number
+  totalBlocks: number
+}) {
+  const progress = totalBlocks > 0 ? Math.round((visibleBlocks / totalBlocks) * 100) : 0
+
+  return (
+    <div className={`generation-constellation ${isGenerating ? 'constellation-active' : ''}`} aria-hidden="true">
+      <div className="constellation-core">
+        <span className="core-ring core-ring-one" />
+        <span className="core-ring core-ring-two" />
+        <strong>{progress}%</strong>
+        <span>manifest</span>
+      </div>
+      {agentRoster.map((agent, index) => (
+        <div
+          className={`constellation-agent ${activeAuthor === agent.id ? 'constellation-agent-active' : ''}`}
+          key={agent.id}
+          style={
+            {
+              '--author-color': agent.color,
+              '--orbit-index': index,
+            } as React.CSSProperties
+          }
+        >
+          <span>{agent.name}</span>
+        </div>
+      ))}
+      <div className="constellation-caption">
+        <span>{isGenerating ? 'Agents weaving interface state' : 'Offline-ready swarm engine'}</span>
+      </div>
+    </div>
+  )
+}
+
+function GenerationRibbon({
+  activeAuthor,
+  visibleBlocks,
+  totalBlocks,
+}: {
+  activeAuthor?: AgentVoice
+  visibleBlocks: number
+  totalBlocks: number
+}) {
+  const activeAgent = activeAuthor ? agentRoster.find((agent) => agent.id === activeAuthor) : undefined
+  const progress = totalBlocks > 0 ? Math.round((visibleBlocks / totalBlocks) * 100) : 0
+
+  return (
+    <div className="generation-ribbon" role="status" aria-live="polite">
+      <div className="ribbon-orbit">
+        {agentRoster.map((agent, index) => (
+          <span
+            key={agent.id}
+            className={activeAuthor === agent.id ? 'ribbon-dot ribbon-dot-active' : 'ribbon-dot'}
+            style={
+              {
+                '--author-color': agent.color,
+                '--dot-index': index,
+              } as React.CSSProperties
+            }
+          />
+        ))}
+      </div>
+      <div>
+        <strong>{activeAgent ? `${activeAgent.name} is shaping the next block` : 'Swarm is generating'}</strong>
+        <span>{progress}% stitched · {visibleBlocks}/{totalBlocks} blocks visible</span>
+      </div>
+    </div>
+  )
 }
 
 function PromptAssist({

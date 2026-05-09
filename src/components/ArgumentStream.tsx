@@ -54,6 +54,12 @@ export function ArgumentStream({ lines, visibleProposedAt, isDisputing, disputeB
                 <span className="argument-role">{agent.role}</span>
               </div>
               <p className="argument-text">{line.text}</p>
+              {line.operation ? (
+                <div className="argument-operation">
+                  <code>{line.operation.capability}</code>
+                  <span>{line.operation.outcome}</span>
+                </div>
+              ) : null}
             </li>
           )
         })}

@@ -100,6 +100,10 @@ export type ArgumentLine = {
   proposedAt: number
   beat: ArgumentBeat
   delayMs?: number
+  operation?: {
+    capability: string
+    outcome: string
+  }
 }
 
 export type UiBlock =
@@ -250,6 +254,12 @@ export type AgentDraft = {
   }
   checklist?: ChecklistItem[]
   consoleLines?: string[]
+  agentTurns?: Array<{
+    agent: AgentVoice
+    text: string
+    capability: string
+    outcome: string
+  }>
 }
 
 export type UseCaseInputs = Record<string, string | number>

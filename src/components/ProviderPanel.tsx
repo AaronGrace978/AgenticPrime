@@ -14,12 +14,14 @@ type ProviderPanelProps = {
   isProviderReady: boolean
   isGenerating: boolean
   generationElapsedSeconds: number
+  offlineChaos: number
   model: string
   onApiKey: (value: string) => void
   onBaseUrl: (value: string) => void
   onCancelGeneration: () => void
   onCustomModelToggle: (next: boolean) => void
   onOfflineFallback: () => void
+  onOfflineChaos: (value: number) => void
   onModel: (value: string) => void
   onProvider: (id: ProviderId) => void
   provider: ProviderId
@@ -35,12 +37,14 @@ export function ProviderPanel({
   isProviderReady,
   isGenerating,
   generationElapsedSeconds,
+  offlineChaos,
   model,
   onApiKey,
   onBaseUrl,
   onCancelGeneration,
   onCustomModelToggle,
   onOfflineFallback,
+  onOfflineChaos,
   onModel,
   onProvider,
   provider,
@@ -154,6 +158,21 @@ export function ProviderPanel({
           />
         </label>
       ) : null}
+      {provider === 'offline' ? (
+        <label className="api-key-field offline-chaos-field" htmlFor="offline-chaos">
+          <span>Deterministic chaos: {offlineChaos}%</span>
+          <input
+            id="offline-chaos"
+            max={100}
+            min={0}
+            step={5}
+            type="range"
+            value={offlineChaos}
+            onChange={(event) => onOfflineChaos(Number(event.target.value))}
+          />
+          <small>Same slider value, same replay. Raise it for varied but still deterministic offline drafts.</small>
+        </label>
+      ) : null}
       {provider === 'ollamaLocal' && model.includes('cloud') ? (
         <div className="provider-warning" role="alert">
           <strong>Local cloud model:</strong> run <code>ollama signin</code>, then
@@ -168,7 +187,7 @@ export function ProviderPanel({
       ) : null}
       <p className="provider-note">
         {provider === 'offline'
-          ? 'Offline swarm. Stage-safe. The agents are deterministic personas.'
+          ? 'Offline swarm. Stage-safe. Agents operate from baked use-case data and never call the network.'
           : 'Generate calls the selected provider through the local Vite API route. Keys are not stored.'}
       </p>
       {providerStatus ? (

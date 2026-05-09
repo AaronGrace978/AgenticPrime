@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { buildOfflineDraft, buildParseFailureDraft } from './src/offlineDrafts'
+import { findUseCase } from './src/useCases'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -73,6 +75,7 @@ export default defineConfig({
 })
 
 type ProviderId =
+  | 'offline'
   | 'gemini'
   | 'openai'
   | 'anthropic'
@@ -81,6 +84,8 @@ type ProviderId =
   | 'ollamaCloud'
   | 'compatible'
   | 'agui'
+
+type AgentVoice = 'sage' | 'forge' | 'lens' | 'echo' | 'wild'
 
 type GenerateUiRequest = {
   provider: ProviderId
@@ -114,6 +119,7 @@ type AgentDraft = {
   }
   checklist?: Array<{ label: string; detail: string; checked: boolean }>
   consoleLines?: string[]
+  agentTurns?: Array<{ agent: AgentVoice; text: string; capability: string; outcome: string }>
 }
 
 type ExportArtifactRequest = {
@@ -136,9 +142,44 @@ type ArtifactReceipt = {
 const jsonHeaders = { 'Content-Type': 'application/json' }
 
 async function generateUiDraft(request: GenerateUiRequest): Promise<AgentDraft> {
-  const prompt = buildPrompt(request)
+  if (request.provider === 'offline') {
+    return buildOfflineDraft({
+      useCase: findUseCase(request.useCase?.id ?? ''),
+      inputs: asUseCaseInputs(request.inputs),
+      intent: request.intent ?? '',
+      chaos: 0,
+    })
+  }
 
+  let parseFailure = ''
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const prompt = attempt === 0
+      ? buildPrompt(request)
+      : buildRepairPrompt(request, parseFailure, attempt)
+
+    try {
+      return await callProviderDraft(request, prompt)
+    } catch (error) {
+      if (!(error instanceof DraftParseError)) {
+        throw error
+      }
+      parseFailure = error.message
+    }
+  }
+
+  return buildParseFailureDraft(parseFailure || 'Provider did not return parseable JSON.')
+}
+
+async function callProviderDraft(request: GenerateUiRequest, prompt: string): Promise<AgentDraft> {
   switch (request.provider) {
+    case 'offline':
+      return buildOfflineDraft({
+        useCase: findUseCase(request.useCase?.id ?? ''),
+        inputs: asUseCaseInputs(request.inputs),
+        intent: request.intent ?? '',
+        chaos: 0,
+      })
     case 'gemini':
       return callGemini(request, prompt)
     case 'openai':
@@ -224,6 +265,7 @@ async function callAnthropic(request: GenerateUiRequest, prompt: string): Promis
     body: JSON.stringify({
       model: request.model?.trim() || 'claude-3-5-sonnet-latest',
       max_tokens: 2400,
+      system: 'Return exactly one valid JSON object for the requested AgentDraft. No markdown. No commentary.',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.7,
     }),
@@ -325,7 +367,8 @@ Return ONLY valid JSON. No markdown. No commentary. Match this shape:
   "executionSteps": [{"title": string, "detail": string, "capabilityHint": string}],
   "approval": {"title": string, "description": string, "risk": string, "actions": string[]},
   "checklist": [{"label": string, "detail": string, "checked": boolean}],
-  "consoleLines": string[]
+  "consoleLines": string[],
+  "agentTurns": [{"agent": "sage" | "forge" | "lens" | "echo" | "wild", "text": string, "capability": string, "outcome": string}]
 }
 
 Rules:
@@ -334,6 +377,7 @@ Rules:
 - Make controls and actions feel executable; this is the surface a human will press to ship work.
 - Keep strings short enough to fit in cards. Avoid filler.
 - Use 3 metrics, 3-4 chart bars, 4 execution steps, 4 approval actions, 3 checklist items.
+- agentTurns must be 5-6 real turns in order: Sage -> Forge -> Lens -> Echo -> Wild -> Sage review. Each turn names a capability-like operation and an outcome.
 - Do not claim actions already happened; this is the pre-approval state.
 - consoleLines should be 3-5 short receipt-style lines starting with "> ".
 
@@ -348,18 +392,46 @@ ${JSON.stringify(request.capabilities ?? [], null, 2)}
 `
 }
 
+function buildRepairPrompt(request: GenerateUiRequest, parseFailure: string, attempt: number): string {
+  return `${buildPrompt(request)}
+
+The previous response failed JSON parsing on repair attempt ${attempt}.
+Failure: ${parseFailure}
+
+Repair instruction:
+- Return one minimal valid JSON object only.
+- Do not wrap it in markdown.
+- Use double-quoted JSON keys and string values.
+- Include title, subtitle, heroTitle, heroBody, chips, metrics, chart, executionSteps, approval, checklist, and consoleLines.
+- If uncertain, use short safe placeholder strings rather than prose outside JSON.
+`
+}
+
+class DraftParseError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DraftParseError'
+  }
+}
+
 function parseDraft(text: string): AgentDraft {
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
 
   if (start === -1 || end === -1 || end <= start) {
-    throw new Error('Provider returned text, but no JSON object was found.')
+    throw new DraftParseError('Provider returned text, but no JSON object was found.')
   }
 
-  const parsed = JSON.parse(text.slice(start, end + 1)) as unknown
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1)) as unknown
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown JSON.parse error.'
+    throw new DraftParseError(`Provider returned malformed JSON. ${message}`)
+  }
 
   if (!isRecord(parsed)) {
-    throw new Error('Provider returned JSON, but it was not an object.')
+    throw new DraftParseError('Provider returned JSON, but it was not an object.')
   }
 
   return normalizeDraft(parsed)
@@ -432,6 +504,18 @@ function normalizeDraft(value: Record<string, unknown>): AgentDraft {
         label: asString(item.label) || 'Generated UI',
         detail: asString(item.detail) || 'The model adapted this surface.',
         checked: typeof item.checked === 'boolean' ? item.checked : true,
+      }))
+  }
+
+  if (Array.isArray(value.agentTurns)) {
+    draft.agentTurns = value.agentTurns
+      .filter(isRecord)
+      .slice(0, 8)
+      .map((turn) => ({
+        agent: toAgentVoice(turn.agent),
+        text: asString(turn.text) || 'Agent reviewed the current surface.',
+        capability: asString(turn.capability) || 'agent.review',
+        outcome: asString(turn.outcome) || 'Turn recorded in the swarm history.',
       }))
   }
 
@@ -1371,12 +1455,31 @@ function asRawNumber(value: unknown, fallback: number): number {
   return Number.isFinite(number) ? number : fallback
 }
 
+function asUseCaseInputs(value: unknown): Record<string, string | number> {
+  if (!isRecord(value)) {
+    return {}
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string | number] => {
+      const input = entry[1]
+      return typeof input === 'string' || typeof input === 'number'
+    }),
+  )
+}
+
 function toTrend(value: unknown): 'up' | 'steady' | 'down' {
   return value === 'down' || value === 'steady' || value === 'up' ? value : 'steady'
 }
 
 function toColor(value: unknown): string {
   return value === 'violet' || value === 'amber' || value === 'cyan' ? value : 'cyan'
+}
+
+function toAgentVoice(value: unknown): AgentVoice {
+  return value === 'sage' || value === 'forge' || value === 'lens' || value === 'echo' || value === 'wild'
+    ? value
+    : 'echo'
 }
 
 function slugify(value: string): string {
