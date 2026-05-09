@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgenticPrime User Guide</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #020617;
+        --panel: #0f172a;
+        --line: rgba(148, 163, 184, 0.24);
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --cyan: #30d5c8;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at 20% 0%, rgba(48, 213, 200, 0.16), transparent 34%),
+          radial-gradient(circle at 85% 10%, rgba(168, 85, 247, 0.16), transparent 30%),
+          var(--bg);
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.6;
+      }
+
+      main {
+        width: min(920px, calc(100vw - 36px));
+        margin: 0 auto;
+        padding: 48px 0 72px;
+      }
+
+      section {
+        margin-top: 18px;
+        padding: 22px;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background: rgba(15, 23, 42, 0.72);
+      }
+
+      h1,
+      h2 {
+        line-height: 1.05;
+      }
+
+      h1 {
+        max-width: 760px;
+        margin: 0 0 12px;
+        font-size: clamp(2.4rem, 7vw, 5rem);
+        letter-spacing: -0.06em;
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        color: var(--cyan);
+      }
+
+      p,
+      li {
+        color: var(--muted);
+      }
+
+      code {
+        color: #a7f3d0;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      }
+
+      .tagline {
+        color: var(--cyan);
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .callout {
+        border-color: rgba(48, 213, 200, 0.36);
+        background: rgba(8, 47, 73, 0.36);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="tagline">AgenticPrime User Guide</p>
+      <h1>Five agents argue. The app appears.</h1>
+      <p>
+        AgenticPrime is an intent-to-interface runtime. It shows five visible agent personas assembling a temporary
+        task surface from one plain-English intent. It is best used as a local experiment, prototype shell, or model
+        provider test bench.
+      </p>
+
+      <section class="callout">
+        <h2>What is real vs simulated?</h2>
+        <p>
+          Real: the React UI, animation, use-case selection, local Vite provider route, provider calls, and JSON
+          normalization. Simulated: capability cards, tool receipts, approvals, submissions, pings, and any external
+          side effect unless you wire a real backend tool behind it.
+        </p>
+      </section>
+
+      <section>
+        <h2>Basic flow</h2>
+        <ol>
+          <li>Run <code>launch.bat</code> or <code>npm run dev</code>.</li>
+          <li>Pick a use case card from the shelf.</li>
+          <li>Write one clear mission in the intent box, or use the default.</li>
+          <li>Choose <strong>Offline demo</strong> for the reliable path, or configure a live provider.</li>
+          <li>Click <strong>Generate surface</strong>.</li>
+          <li>Use the time scrubber to replay how the surface appeared.</li>
+          <li>Approve the simulated execution to see the receipt ending.</li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>Good intent prompts</h2>
+        <p>Keep it short and situational. You are telling the swarm what job this temporary UI should perform.</p>
+        <ul>
+          <li>
+            <code>I am at AI Tinkerers Boston. Help me prep a 5-minute pitch that wins the room.</code>
+          </li>
+          <li>
+            <code>I have 12% battery and an outage. Show the next three actions and the one risk I need to approve.</code>
+          </li>
+          <li>
+            <code>Build a decision surface for whether I should quit my job and found a company this month.</code>
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Ollama setup</h2>
+        <p>
+          <strong>Ollama local daemon:</strong> install Ollama, run <code>ollama serve</code>, and pull a model. For
+          cloud-backed local models, run <code>ollama signin</code>, then pick one of the dropdown models such as
+          <code>kimi-k2.6:cloud</code>, <code>deepseek-v4-pro:cloud</code>, or <code>gpt-oss:120b-cloud</code>. Pull it
+          first if needed. Use endpoint <code>http://localhost:11434</code> and leave the API key blank.
+        </p>
+        <p>
+          <strong>Ollama Cloud API:</strong> create an API key at <code>https://ollama.com/settings/keys</code>. Use the
+          app's Ollama Cloud API provider and choose from the dropdown catalog: <code>kimi-k2.6</code>,
+          <code>deepseek-v4-pro</code>, <code>glm-5.1</code>, <code>qwen3-coder-next</code>, and others. Direct Cloud
+          API calls use <code>https://ollama.com/api/chat</code> under the hood.
+        </p>
+      </section>
+
+      <section>
+        <h2>Production note</h2>
+        <p>
+          This repo is safe for local BYOK demos. A public deployment should move provider calls and API keys behind a
+          real backend secret boundary before allowing untrusted users.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>
